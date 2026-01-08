@@ -1,36 +1,30 @@
 import { Telegraf } from 'telegraf'
-import sqlite3 from 'sqlite3'
-import dayjs from 'dayjs'
-import utc from 'dayjs/plugin/utc'
-import timezone from 'dayjs/plugin/timezone'
 import XLSX from 'xlsx'
-import fs from 'fs'
 
-dayjs.extend(utc)
-dayjs.extend(timezone)
-
-const LOCAL_TZ = 'Asia/Yangon'
 const bot = new Telegraf(process.env.BOT_TOKEN)
 
-// ===== SQLite (safe for Railway) =====
-const db = new sqlite3.Database('./data.db')
+// ===== In-memory store (Railway safe, simple) =====
+const store = new Map()
 
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS records (
-      chat_id INTEGER,
-      value TEXT,
-      type TEXT,
-      first_user INTEGER,
-      created_at TEXT,
-      count INTEGER DEFAULT 1,
-      UNIQUE(chat_id, value, type)
-    )
-  `)
-})
+function getUser(chatId, userId) {
+  const key = `${chatId}:${userId}`
+  if (!store.has(key)) {
+    store.set(key, {
+      day: today(),
+      month: month(),
+      phonesDay: new Set(),
+      usersDay: new Set(),
+      phonesMonth: new Set(),
+      usersMonth: new Set()
+    })
+  }
+  return store.get(key)
+}
 
-// ===== Utils =====
-const extractPhones = t => t.match(/\+?\d{8,15}/g) || []
+const today = () => new Date().toISOString().slice(0,10)
+const month = () => new Date().toISOString().slice(0,7)
+
+const extractPhones = t => t.match(/\b\d{7,15}\b/g) || []
 const extractMentions = t => t.match(/@[a-zA-Z0-9_]{3,32}/g) || []
 
 async function isAdmin(ctx) {
@@ -43,92 +37,94 @@ async function isAdmin(ctx) {
 }
 
 // ===== Message Listener =====
-bot.on('text', async (ctx) => {
-  const text = ctx.message.text || ''
+bot.on('text', async ctx => {
+  const text = ctx.message.text
+  const data = getUser(ctx.chat.id, ctx.from.id)
+
+  if (data.day !== today()) {
+    data.day = today()
+    data.phonesDay.clear()
+    data.usersDay.clear()
+  }
+
+  if (data.month !== month()) {
+    data.month = month()
+    data.phonesMonth.clear()
+    data.usersMonth.clear()
+  }
+
   const phones = extractPhones(text)
-  const mentions = extractMentions(text)
-  if (!phones.length && !mentions.length) return
+  const users = extractMentions(text)
 
-  const now = dayjs().tz(LOCAL_TZ)
-  const nowStr = now.format('YYYY-MM-DD HH:mm:ss')
+  let dupCount = 0
+  let dupList = []
 
-  let duplicates = []
-  let duplicateCount = 0
+  phones.forEach(p => {
+    if (data.phonesMonth.has(p)) {
+      dupCount++; dupList.push(p)
+    } else {
+      data.phonesDay.add(p)
+      data.phonesMonth.add(p)
+    }
+  })
 
-  const items = [
-    ...phones.map(v => ({ v, type: 'phone' })),
-    ...mentions.map(v => ({ v, type: 'mention' }))
-  ]
+  users.forEach(u => {
+    if (data.usersMonth.has(u)) {
+      dupCount++; dupList.push(u)
+    } else {
+      data.usersDay.add(u)
+      data.usersMonth.add(u)
+    }
+  })
 
-  for (const item of items) {
-    await new Promise(res => {
-      db.get(
-        `SELECT count FROM records WHERE chat_id=? AND value=? AND type=?`,
-        [ctx.chat.id, item.v, item.type],
-        (err, row) => {
-          if (row) {
-            duplicateCount++
-            duplicates.push(item.v)
-            db.run(
-              `UPDATE records SET count=count+1 WHERE chat_id=? AND value=? AND type=?`,
-              [ctx.chat.id, item.v, item.type]
-            )
-          } else {
-            db.run(
-              `INSERT INTO records (chat_id,value,type,first_user,created_at)
-               VALUES (?,?,?,?,?)`,
-              [ctx.chat.id, item.v, item.type, ctx.from.id, nowStr]
-            )
-          }
-          res()
-        }
-      )
+  if (!text.startsWith('/')) return
+
+  let msg = ''
+  const now = new Date().toLocaleString()
+
+  if (text === '/today') {
+    msg =
+`👤 User: ${ctx.from.username || ctx.from.first_name} (${ctx.from.id})
+📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
+📱 Phone Numbers: ${data.phonesDay.size}
+@ Usernames: ${data.usersDay.size}
+📈 Daily Increase: ${data.phonesDay.size + data.usersDay.size}
+📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
+📅 Time: ${now}`
+  }
+
+  if (text === '/month') {
+    msg =
+`👤 User: ${ctx.from.username || ctx.from.first_name} (${ctx.from.id})
+📱 Phone Numbers: ${data.phonesMonth.size}
+@ Usernames: ${data.usersMonth.size}
+📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
+📅 Time: ${now}`
+  }
+
+  if (msg) ctx.reply(msg)
+})
+
+// ===== Export (Admin Only) =====
+bot.command('export', async ctx => {
+  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
+
+  const rows = []
+  for (const [k, v] of store.entries()) {
+    rows.push({
+      key: k,
+      phones_month: v.phonesMonth.size,
+      users_month: v.usersMonth.size
     })
   }
 
-  const dayStart = now.startOf('day').format('YYYY-MM-DD HH:mm:ss')
-  const monthStart = now.startOf('month').format('YYYY-MM-DD HH:mm:ss')
-
-  const getCount = (sql, params) =>
-    new Promise(r => db.get(sql, params, (_, row) => r(row.total)))
-
-  const daily = await getCount(
-    `SELECT COUNT(*) total FROM records WHERE chat_id=? AND first_user=? AND created_at>=?`,
-    [ctx.chat.id, ctx.from.id, dayStart]
-  )
-
-  const monthly = await getCount(
-    `SELECT COUNT(*) total FROM records WHERE chat_id=? AND first_user=? AND created_at>=?`,
-    [ctx.chat.id, ctx.from.id, monthStart]
-  )
-
-  ctx.reply(
-`👤 ${ctx.from.first_name || 'User'} (${ctx.from.id})
-📝 Duplicate: ${duplicateCount ? `⚠️ ${duplicates.join(' / ')} (${duplicateCount})` : 'None'}
-📱 Phone Numbers Today: ${phones.length}
-@ Usernames Today: ${mentions.length}
-📈 Daily Increase: ${daily}
-📊 Monthly Total: ${monthly}
-📅 Time: ${nowStr}`
-  )
-})
-
-// ===== /export admin only =====
-bot.command('export', async (ctx) => {
-  if (!(await isAdmin(ctx))) {
-    return ctx.reply('❌ Only administrators can export data.')
-  }
-
-  db.all(`SELECT * FROM records WHERE chat_id=?`, [ctx.chat.id], async (_, rows) => {
-    const ws = XLSX.utils.json_to_sheet(rows)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'records')
-    const file = `export_${Date.now()}.xlsx`
-    XLSX.writeFile(wb, file)
-    await ctx.replyWithDocument({ source: file })
-    fs.unlinkSync(file)
-  })
+  const ws = XLSX.utils.json_to_sheet(rows)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'stats')
+  const file = 'export.xlsx'
+  XLSX.writeFile(wb, file)
+  await ctx.replyWithDocument({ source: file })
 })
 
 bot.launch()
-console.log('✅ Bot started (Railway safe)')
+console.log('✅ Bot running on Railway')
