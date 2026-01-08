@@ -1,5 +1,5 @@
 {
-  "name": "tg-duplicate-checker",
+  "name": "tg-group-duplicate-checker",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -8,6 +8,7 @@
   "dependencies": {
     "telegraf": "^4.16.3",
     "better-sqlite3": "^9.4.0",
-    "dayjs": "^1.11.10"
+    "dayjs": "^1.11.10",
+    "xlsx": "^0.18.5"
   }
 }

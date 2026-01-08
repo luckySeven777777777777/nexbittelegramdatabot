@@ -1,1 +1,5 @@
-{"deploy": {"startCommand": "npm start"}}
+{
+  "deploy": {
+    "startCommand": "npm start"
+  }
+}
