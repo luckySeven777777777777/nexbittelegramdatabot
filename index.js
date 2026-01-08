@@ -41,6 +41,7 @@ bot.on('text', async ctx => {
   const text = ctx.message.text
   const data = getUser(ctx.chat.id, ctx.from.id)
 
+  // ===== Reset logic =====
   if (data.day !== today()) {
     data.day = today()
     data.phonesDay.clear()
@@ -53,6 +54,7 @@ bot.on('text', async ctx => {
     data.usersMonth.clear()
   }
 
+  // ===== Extract =====
   const phones = extractPhones(text)
   const users = extractMentions(text)
 
@@ -61,7 +63,8 @@ bot.on('text', async ctx => {
 
   phones.forEach(p => {
     if (data.phonesMonth.has(p)) {
-      dupCount++; dupList.push(p)
+      dupCount++
+      dupList.push(p)
     } else {
       data.phonesDay.add(p)
       data.phonesMonth.add(p)
@@ -70,39 +73,29 @@ bot.on('text', async ctx => {
 
   users.forEach(u => {
     if (data.usersMonth.has(u)) {
-      dupCount++; dupList.push(u)
+      dupCount++
+      dupList.push(u)
     } else {
       data.usersDay.add(u)
       data.usersMonth.add(u)
     }
   })
 
-  if (!text.startsWith('/')) return
+  // ===== Auto reply for ANY message =====
+  const now = new Date().toLocaleString('en-US', {
+    timeZone: 'Asia/Yangon'
+  })
 
-  let msg = ''
-  const now = new Date().toLocaleString()
-
-  if (text === '/today') {
-    msg =
+  const msg =
 `👤 User: ${ctx.from.username || ctx.from.first_name} (${ctx.from.id})
 📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
-📱 Phone Numbers: ${data.phonesDay.size}
-@ Usernames: ${data.usersDay.size}
+📱 Phone Numbers Today: ${data.phonesDay.size}
+@ Username Count Today: ${data.usersDay.size}
 📈 Daily Increase: ${data.phonesDay.size + data.usersDay.size}
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
 📅 Time: ${now}`
-  }
 
-  if (text === '/month') {
-    msg =
-`👤 User: ${ctx.from.username || ctx.from.first_name} (${ctx.from.id})
-📱 Phone Numbers: ${data.phonesMonth.size}
-@ Usernames: ${data.usersMonth.size}
-📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
-📅 Time: ${now}`
-  }
-
-  if (msg) ctx.reply(msg)
+  await ctx.reply(msg)
 })
 
 // ===== Export (Admin Only) =====
