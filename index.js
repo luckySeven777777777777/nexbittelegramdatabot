@@ -135,13 +135,14 @@ bot.on('text', async ctx => {
   })
 
   const msg =
-`👤 User: ${ctx.from.username || ctx.from.first_name} 后面是 ${ctx.from.id}
+`👤 User: ${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''} ${ctx.from.id}
 📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
 📱 Phone Numbers Today: ${data.phonesDay.size}
 @ Username Count Today: ${data.usersDay.size}
 📈 Daily Increase: ${data.phonesDay.size + data.usersDay.size}
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
 📅 Time: ${now}`
+
 
   await ctx.reply(msg)
 })
