@@ -1,10 +1,47 @@
 import { Telegraf } from 'telegraf'
 import XLSX from 'xlsx'
+import fs from 'fs'
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 
 // ===== In-memory store (Railway safe, simple) =====
 const store = new Map()
+
+// ===== History store (global, preload) =====
+store.set('HISTORY', {
+  phones: new Set(),
+  users: new Set()
+})
+
+function normalizePhone(p) {
+  return p.replace(/\D/g, '')
+}
+
+// ===== Load history.txt once at startup =====
+function preloadHistory(file = 'history.txt') {
+  if (!fs.existsSync(file)) {
+    console.log('⚠️ history.txt not found, skip preload')
+    return
+  }
+
+  const text = fs.readFileSync(file, 'utf8')
+
+  const rawPhones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
+  const rawUsers = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
+
+  const history = store.get('HISTORY')
+
+  rawPhones.forEach(p => {
+    const n = normalizePhone(p)
+    if (n.length >= 7) history.phones.add(n)
+  })
+
+  rawUsers.forEach(u => history.users.add(u.toLowerCase()))
+
+  console.log(
+    `📚 History loaded: ${history.phones.size} phones, ${history.users.size} usernames`
+  )
+}
 
 function getUser(chatId, userId) {
   const key = `${chatId}:${userId}`
@@ -40,6 +77,7 @@ async function isAdmin(ctx) {
 bot.on('text', async ctx => {
   const text = ctx.message.text
   const data = getUser(ctx.chat.id, ctx.from.id)
+  const history = store.get('HISTORY')
 
   // ===== Reset logic =====
   if (data.day !== today()) {
@@ -62,22 +100,32 @@ bot.on('text', async ctx => {
   let dupList = []
 
   phones.forEach(p => {
-    if (data.phonesMonth.has(p)) {
+    const np = normalizePhone(p)
+    if (
+      history.phones.has(np) ||
+      data.phonesMonth.has(np)
+    ) {
       dupCount++
-      dupList.push(p)
+      dupList.push(np)
     } else {
-      data.phonesDay.add(p)
-      data.phonesMonth.add(p)
+      data.phonesDay.add(np)
+      data.phonesMonth.add(np)
+      history.phones.add(np) // 只加，不删除
     }
   })
 
   users.forEach(u => {
-    if (data.usersMonth.has(u)) {
+    const nu = u.toLowerCase()
+    if (
+      history.users.has(nu) ||
+      data.usersMonth.has(nu)
+    ) {
       dupCount++
-      dupList.push(u)
+      dupList.push(nu)
     } else {
-      data.usersDay.add(u)
-      data.usersMonth.add(u)
+      data.usersDay.add(nu)
+      data.usersMonth.add(nu)
+      history.users.add(nu) // 只加，不删除
     }
   })
 
@@ -104,6 +152,7 @@ bot.command('export', async ctx => {
 
   const rows = []
   for (const [k, v] of store.entries()) {
+    if (k === 'HISTORY') continue
     rows.push({
       key: k,
       phones_month: v.phonesMonth.size,
@@ -119,5 +168,7 @@ bot.command('export', async ctx => {
   await ctx.replyWithDocument({ source: file })
 })
 
+// ===== Start =====
+preloadHistory()
 bot.launch()
 console.log('✅ Bot running on Railway')
