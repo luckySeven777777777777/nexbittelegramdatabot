@@ -1,0 +1,13 @@
+{
+  "name": "tg-duplicate-checker",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "better-sqlite3": "^9.4.0",
+    "dayjs": "^1.11.10"
+  }
+}
