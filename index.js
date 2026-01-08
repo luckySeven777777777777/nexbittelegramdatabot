@@ -135,7 +135,7 @@ bot.on('text', async ctx => {
   })
 
   const msg =
-`👤 User: ${ctx.from.username || ctx.from.first_name} (${ctx.from.id})
+`👤 User: ${ctx.from.username || ctx.from.first_name} 后面是 ${ctx.from.id}
 📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
 📱 Phone Numbers Today: ${data.phonesDay.size}
 @ Username Count Today: ${data.usersDay.size}
