@@ -146,19 +146,23 @@ bot.on('text', async ctx => {
 
   await ctx.reply(msg)
 
-  // ===== Append history log (NEW, no side effects) =====
-  store.get('HISTORY_LOG').push({
-    chatId: ctx.chat.id,
-    userId: ctx.from.id,
-    username: ctx.from.username || '',
-    name: `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim(),
-    date: today(),
-    time: now,
-    phones: [...data.phonesDay],
-    users: [...data.usersDay],
-    dailyIncrease: data.phonesDay.size + data.usersDay.size,
-    monthlyTotal: data.phonesMonth.size + data.usersMonth.size
+// ===== Append history log (FIXED: record per-message data) =====
+store.get('HISTORY_LOG').push({
+  chatId: ctx.chat.id,
+  userId: ctx.from.id,
+  username: ctx.from.username || '',
+  name: `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim(),
+  date: today(),
+  time: now,
+
+  // ⚠️ 关键修改点在这里
+  phones: phones,          // 本条消息提取到的
+  users: users,            // 本条消息提取到的
+
+  dailyIncrease: phones.length + users.length,
+  monthlyTotal: data.phonesMonth.size + data.usersMonth.size
   })
+
 })
 
 // ===== Export (Admin Only) =====
