@@ -1,53 +1,54 @@
 import { Telegraf, Markup } from 'telegraf'
 import XLSX from 'xlsx'
 import fs from 'fs'
-import http from 'http'
-import path from 'path'
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 
-// ===== 基础配置 =====
-const EXPORT_DIR = './exports'
-const DOWNLOAD_BASE = process.env.DOWNLOAD_BASE || 'http://localhost:3000'
-
-if (!fs.existsSync(EXPORT_DIR)) fs.mkdirSync(EXPORT_DIR)
-
-// ===== In-memory store =====
+// ===== In-memory store (Railway safe, simple) =====
 const store = new Map()
 
-// ===== History store =====
+// ===== History store (global, preload) =====
 store.set('HISTORY', {
   phones: new Set(),
   users: new Set()
 })
 
-// ===== 每日消息明细（用于按日导出）=====
-store.set('DAILY_LOG', new Map()) // date -> [{ user, phone, username, time }]
-
 function normalizePhone(p) {
   return p.replace(/\D/g, '')
 }
 
-// ===== Load history.txt =====
+// ===== Load history.txt once at startup =====
 function preloadHistory(file = 'history.txt') {
-  if (!fs.existsSync(file)) return
+  if (!fs.existsSync(file)) {
+    console.log('⚠️ history.txt not found, skip preload')
+    return
+  }
 
   const text = fs.readFileSync(file, 'utf8')
+
+  const rawPhones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
+  const rawUsers = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
+
   const history = store.get('HISTORY')
 
-  ;(text.match(/\b\d{7,15}\b/g) || []).forEach(p => history.phones.add(normalizePhone(p)))
-  ;(text.match(/@[a-zA-Z0-9_]{3,32}/g) || []).forEach(u => history.users.add(u.toLowerCase()))
-}
+  rawPhones.forEach(p => {
+    const n = normalizePhone(p)
+    if (n.length >= 7) history.phones.add(n)
+  })
 
-const today = () => new Date().toISOString().slice(0, 10)
-const monthNow = () => new Date().toISOString().slice(0, 7)
+  rawUsers.forEach(u => history.users.add(u.toLowerCase()))
+
+  console.log(
+    `📚 History loaded: ${history.phones.size} phones, ${history.users.size} usernames`
+  )
+}
 
 function getUser(chatId, userId) {
   const key = `${chatId}:${userId}`
   if (!store.has(key)) {
     store.set(key, {
       day: today(),
-      month: monthNow(),
+      month: month(),
       phonesDay: new Set(),
       usersDay: new Set(),
       phonesMonth: new Set(),
@@ -56,6 +57,9 @@ function getUser(chatId, userId) {
   }
   return store.get(key)
 }
+
+const today = () => new Date().toISOString().slice(0, 10)
+const month = () => new Date().toISOString().slice(0, 7)
 
 const extractPhones = t => t.match(/\b\d{7,15}\b/g) || []
 const extractMentions = t => t.match(/@[a-zA-Z0-9_]{3,32}/g) || []
@@ -69,128 +73,146 @@ async function isAdmin(ctx) {
   }
 }
 
-// ===== 消息监听 =====
+// ===== Message Listener =====
 bot.on('text', async ctx => {
   const text = ctx.message.text
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
-  const date = today()
 
-  if (data.day !== date) {
-    data.day = date
+  // ===== Reset logic =====
+  if (data.day !== today()) {
+    data.day = today()
     data.phonesDay.clear()
     data.usersDay.clear()
   }
 
-  if (data.month !== monthNow()) {
-    data.month = monthNow()
+  if (data.month !== month()) {
+    data.month = month()
     data.phonesMonth.clear()
     data.usersMonth.clear()
   }
 
+  // ===== Extract =====
   const phones = extractPhones(text)
   const users = extractMentions(text)
 
-  if (!store.get('DAILY_LOG').has(date)) {
-    store.get('DAILY_LOG').set(date, [])
-  }
+  let dupCount = 0
+  let dupList = []
 
   phones.forEach(p => {
     const np = normalizePhone(p)
-    if (!history.phones.has(np)) {
+    if (history.phones.has(np) || data.phonesMonth.has(np)) {
+      dupCount++
+      dupList.push(np)
+    } else {
       data.phonesDay.add(np)
       data.phonesMonth.add(np)
       history.phones.add(np)
-
-      store.get('DAILY_LOG').get(date).push({
-        user: ctx.from.id,
-        phone: np,
-        username: '',
-        time: new Date().toISOString()
-      })
     }
   })
 
   users.forEach(u => {
     const nu = u.toLowerCase()
-    if (!history.users.has(nu)) {
+    if (history.users.has(nu) || data.usersMonth.has(nu)) {
+      dupCount++
+      dupList.push(nu)
+    } else {
       data.usersDay.add(nu)
       data.usersMonth.add(nu)
       history.users.add(nu)
-
-      store.get('DAILY_LOG').get(date).push({
-        user: ctx.from.id,
-        phone: '',
-        username: nu,
-        time: new Date().toISOString()
-      })
     }
   })
+
+  const now = new Date().toLocaleString('en-US', {
+    timeZone: 'Asia/Yangon'
+  })
+
+  const msg =
+`👤 User: ${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''} ${ctx.from.id}
+📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
+📱 Phone Numbers Today: ${data.phonesDay.size}
+@ Username Count Today: ${data.usersDay.size}
+📈 Daily Increase: ${data.phonesDay.size + data.usersDay.size}
+📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
+📅 Time: ${now}`
+
+  await ctx.reply(msg)
 })
 
-// ===== /month 面板 =====
-bot.command('month', async ctx => {
-  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
-  const buttons = []
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10)
-    buttons.push([Markup.button.callback(`📅 ${d}`, `EXPORT_DAY:${d}`)])
-  }
+// ===== /month command (with Export button) =====
+bot.command('month', async ctx => {
+  const data = getUser(ctx.chat.id, ctx.from.id)
+
+  const msg =
+`📊 Monthly Summary
+📱 Phone Numbers: ${data.phonesMonth.size}
+@ Usernames: ${data.usersMonth.size}
+📈 Total: ${data.phonesMonth.size + data.usersMonth.size}`
 
   await ctx.reply(
-    '📊 请选择要导出的日期：',
-    Markup.inlineKeyboard(buttons)
+    msg,
+    Markup.inlineKeyboard([
+      Markup.button.callback('📥 Export', 'EXPORT_DATA')
+    ])
   )
 })
 
-// ===== 导出指定日期 =====
-bot.action(/EXPORT_DAY:(.+)/, async ctx => {
-  if (!(await isAdmin(ctx))) return ctx.answerCbQuery('Admin only')
 
-  const date = ctx.match[1]
-  const rows = store.get('DAILY_LOG').get(date) || []
+// ===== Export Button Handler (Admin Only) =====
+bot.action('EXPORT_DATA', async ctx => {
+  await ctx.answerCbQuery()
 
-  if (!rows.length) {
-    return ctx.reply(`⚠️ ${date} 没有数据`)
+  if (!(await isAdmin(ctx))) {
+    return ctx.reply('❌ Admin only')
+  }
+
+  const rows = []
+  for (const [k, v] of store.entries()) {
+    if (k === 'HISTORY') continue
+    rows.push({
+      key: k,
+      phones_month: v.phonesMonth.size,
+      users_month: v.usersMonth.size
+    })
   }
 
   const ws = XLSX.utils.json_to_sheet(rows)
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Details')
+  XLSX.utils.book_append_sheet(wb, ws, 'stats')
 
-  const file = `${EXPORT_DIR}/orders_${date}.xlsx`
+  const file = 'export.xlsx'
   XLSX.writeFile(wb, file)
 
-  const link = `${DOWNLOAD_BASE}/downloads/orders_${date}.xlsx`
-  await ctx.reply(`✅ 导出完成\n📥 下载链接：\n${link}`)
-  await ctx.answerCbQuery('OK')
+  await ctx.replyWithDocument({ source: file })
 })
-// ===== HTTP 下载服务（Railway 兼容）=====
-const PORT = process.env.PORT || 3000
 
-http.createServer((req, res) => {
-  if (req.url.startsWith('/downloads/')) {
-    const file = path.join(EXPORT_DIR, req.url.replace('/downloads/', ''))
 
-    if (fs.existsSync(file)) {
-      res.writeHead(200, {
-        'Content-Type': 'application/octet-stream'
-      })
-      fs.createReadStream(file).pipe(res)
-    } else {
-      res.writeHead(404)
-      res.end('Not found')
-    }
-  } else {
-    res.writeHead(404)
-    res.end('Invalid path')
+// ===== /export command (Admin Only, manual) =====
+bot.command('export', async ctx => {
+  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
+
+  const rows = []
+  for (const [k, v] of store.entries()) {
+    if (k === 'HISTORY') continue
+    rows.push({
+      key: k,
+      phones_month: v.phonesMonth.size,
+      users_month: v.usersMonth.size
+    })
   }
-}).listen(PORT, () => {
-  console.log(`📥 Download server running on port ${PORT}`)
+
+  const ws = XLSX.utils.json_to_sheet(rows)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'stats')
+
+  const file = 'export.xlsx'
+  XLSX.writeFile(wb, file)
+  await ctx.replyWithDocument({ source: file })
 })
+
 
 // ===== Start =====
 preloadHistory()
 bot.launch()
-console.log('✅ Bot running with calendar export + download link')
+console.log('✅ Bot running on Railway')
