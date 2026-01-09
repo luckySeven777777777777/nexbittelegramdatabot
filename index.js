@@ -110,7 +110,9 @@ bot.on('text', async ctx => {
     } else {
       data.phonesDay.add(np)
       data.phonesMonth.add(np)
-      history.phones.add(np) // 只加，不删除
+      history.phones.add(np)
+fs.appendFileSync('history.txt', np + '\n')
+ // 只加，不删除
     }
   })
 
@@ -125,7 +127,9 @@ bot.on('text', async ctx => {
     } else {
       data.usersDay.add(nu)
       data.usersMonth.add(nu)
-      history.users.add(nu) // 只加，不删除
+      history.users.add(nu)
+fs.appendFileSync('history.txt', nu + '\n')
+ // 只加，不删除
     }
   })
 
@@ -147,46 +151,51 @@ bot.on('text', async ctx => {
   await ctx.reply(msg)
 })
 
-// ===== Export CSV (Admin Only) =====
+// ===== Export (Admin Only) =====
 bot.command('export', async ctx => {
-  if (!(await isAdmin(ctx))) {
-    return ctx.reply('❌ Admin only')
-  }
+  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
   const rows = []
-
   for (const [k, v] of store.entries()) {
     if (k === 'HISTORY') continue
-
-    const [chatId, userId] = k.split(':')
-
     rows.push({
-      chat_id: chatId,
-      user_id: userId,
-      phone_numbers_month: v.phonesMonth.size,
-      usernames_month: v.usersMonth.size,
-      phone_numbers_today: v.phonesDay.size,
-      usernames_today: v.usersDay.size,
-      monthly_total: v.phonesMonth.size + v.usersMonth.size,
-      daily_total: v.phonesDay.size + v.usersDay.size
+      key: k,
+      phones_month: v.phonesMonth.size,
+      users_month: v.usersMonth.size
     })
   }
 
-  if (rows.length === 0) {
-    return ctx.reply('⚠️ No data to export')
-  }
-
-  // 👉 生成 CSV
   const ws = XLSX.utils.json_to_sheet(rows)
-  const csv = XLSX.utils.sheet_to_csv(ws)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'stats')
+  const file = 'export.xlsx'
+  XLSX.writeFile(wb, file)
+  await ctx.replyWithDocument({ source: file })
+})
+// ===== Download History TXT (Admin Only) =====
+bot.command('history', async ctx => {
+  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
-  const fileName = `export_${Date.now()}.csv`
-  fs.writeFileSync(fileName, csv, 'utf8')
+  const history = store.get('HISTORY')
 
-  await ctx.replyWithDocument({
-    source: fileName,
-    filename: fileName
-  })
+  let content = '📚 HISTORY RECORD\n\n'
+
+  content += '📱 PHONES:\n'
+  content += history.phones.size
+    ? [...history.phones].join('\n')
+    : 'None'
+
+  content += '\n\n👤 USERNAMES:\n'
+  content += history.users.size
+    ? [...history.users].join('\n')
+    : 'None'
+
+  // ⚠️ 用临时文件名
+  const file = `history_download_${Date.now()}.txt`
+
+  fs.writeFileSync(file, content, 'utf8')
+  await ctx.replyWithDocument({ source: file })
+  fs.unlinkSync(file) // 只删临时文件
 })
 
 // ===== Start =====
