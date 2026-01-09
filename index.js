@@ -51,12 +51,12 @@ function preloadHistory(file = 'history.txt') {
   const text = fs.readFileSync(file, 'utf8')
   const history = store.get('HISTORY')
 
-  const phones = text.match(/\b\d{7,15}\b/g) || []
+  const phones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
   const users = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
 
   phones.forEach(p => {
-    const np = normalizePhone(p)
-    if (np.length >= 7) history.phones.add(np)
+    const n = normalizePhone(p)
+    if (n.length >= 7) history.phones.add(n)
   })
 
   users.forEach(u => history.users.add(u.toLowerCase()))
@@ -64,7 +64,7 @@ function preloadHistory(file = 'history.txt') {
   console.log(`📚 History loaded: ${history.phones.size} phones, ${history.users.size} users`)
 }
 
-// ================== COMMANDS ==================
+// ================== COMMANDS (一定要在前面) ==================
 
 // ---- EXPORT STATS ----
 bot.command('export', async ctx => {
@@ -90,17 +90,52 @@ bot.command('export', async ctx => {
   fs.unlinkSync(file)
 })
 
-// ---- DOWNLOAD HISTORY TXT ----
+// ---- DOWNLOAD HISTORY TXT (with filters) ----
 bot.command('history', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
+  // 解析参数: /history userId YYYY-MM-DD
+  const args = ctx.message.text.split(' ').slice(1)
+  let targetUserId = null
+  let targetDate = null
+
+  if (args[0] && /^\d+$/.test(args[0])) targetUserId = args[0]
+  if (args[1] && /^\d{4}-\d{2}-\d{2}$/.test(args[1])) targetDate = args[1]
+
   const history = store.get('HISTORY')
+  let rows = []
+
+  for (const [key, data] of store.entries()) {
+    if (key === 'HISTORY') continue
+
+    const [chatId, userId] = key.split(':')
+    if (targetUserId && targetUserId !== userId) continue
+    if (targetDate && data.day !== targetDate) continue
+
+    rows.push({
+      user: userId,
+      phones_today: data.phonesDay.size,
+      users_today: data.usersDay.size,
+      daily_increase: data.phonesDay.size + data.usersDay.size,
+      monthly_total: data.phonesMonth.size + data.usersMonth.size,
+      time: data.day
+    })
+  }
 
   let content = '📚 HISTORY RECORD\n\n'
-  content += '📱 PHONES:\n'
-  content += history.phones.size ? [...history.phones].join('\n') : 'None'
-  content += '\n\n👤 USERNAMES:\n'
-  content += history.users.size ? [...history.users].join('\n') : 'None'
+
+  for (const r of rows) {
+    content += `👤 User: ${r.user}\n`
+    content += `📱 PHONES: ${r.phones_today}\n`
+    content += `📝 Duplicate: None\n` // 如果你想显示重复，可以改这里
+    content += `👤 USERNAMES: ${r.users_today}\n`
+    content += `@ Username Count Today: ${r.users_today}\n`
+    content += `📈 Daily Increase: ${r.daily_increase}\n`
+    content += `📊 Monthly Total: ${r.monthly_total}\n`
+    content += `📅 Time: ${r.time}\n\n================\n\n`
+  }
+
+  if (!rows.length) content += 'No records found for given filters.'
 
   const file = `history_download_${Date.now()}.txt`
   fs.writeFileSync(file, content, 'utf8')
@@ -108,73 +143,6 @@ bot.command('history', async ctx => {
   fs.unlinkSync(file)
 })
 
-// ---- DOWNLOAD SPECIFIC USER HISTORY TXT ----
-bot.command('history_user', async ctx => {
-  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
-
-  const args = ctx.message.text.split(' ')
-  const targetUserId = args[1]
-  if (!targetUserId) return ctx.reply('❗ 用法: /history_user <userId>')
-
-  const history = store.get('HISTORY')
-
-  // ====== 先读取历史TXT ======
-  let filePhones = new Set()
-  let fileUsers = new Set()
-  if (fs.existsSync('history.txt')) {
-    const text = fs.readFileSync('history.txt', 'utf8')
-    const phones = text.match(/\b\d{7,15}\b/g) || []
-    const users = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
-
-    phones.forEach(p => filePhones.add(normalizePhone(p)))
-    users.forEach(u => fileUsers.add(u.toLowerCase()))
-  }
-
-  // ====== 内存中当天/当月数据 ======
-  const targetKey = `${ctx.chat.id}:${targetUserId}`
-  const targetData = store.get(targetKey) || {
-    phonesDay: new Set(),
-    usersDay: new Set(),
-    phonesMonth: new Set(),
-    usersMonth: new Set()
-  }
-
-  // ====== 计算统计 ======
-  const dailyPhones = targetData.phonesDay.size
-  const dailyUsers = targetData.usersDay.size
-  const dailyIncrease = dailyPhones + dailyUsers
-
-  const allPhones = new Set([...filePhones, ...targetData.phonesMonth])
-  const allUsers = new Set([...fileUsers, ...targetData.usersMonth])
-  const monthlyTotal = allPhones.size + allUsers.size
-
-  const duplicates = Math.max(0, monthlyTotal - dailyIncrease)
-
-  const now = new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
-
-  // ====== 构造内容 ======
-  let content = `📚 HISTORY RECORD\n\n`
-  content += `👤 User: ${targetUserId}\n\n`
-
-  content += `📱 PHONES:\n`
-  content += allPhones.size ? [...allPhones].join('\n') : 'None'
-
-  content += `\n\n📝 Duplicate: ⚠️ ${duplicates}\n\n`
-
-  content += `👤 USERNAMES:\n`
-  content += allUsers.size ? [...allUsers].join('\n') : 'None'
-
-  content += `\n\n📱 Phone Numbers Today: ${dailyPhones}`
-  content += `\n@ Username Count Today: ${dailyUsers}`
-  content += `\n📈 Daily Increase: ${dailyIncrease}`
-  content += `\n📊 Monthly Total: ${monthlyTotal}`
-  content += `\n📅 Time: ${now}`
-
-  const file = `history_user_${targetUserId}_${Date.now()}.txt`
-  fs.writeFileSync(file, content, 'utf8')
-  await ctx.replyWithDocument({ source: file })
-  fs.unlinkSync(file)
-})
 // ================== TEXT LISTENER (最后) ==================
 bot.on('text', async ctx => {
   const text = ctx.message.text
