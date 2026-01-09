@@ -13,9 +13,6 @@ store.set('HISTORY', {
   users: new Set()
 })
 
-// ===== Daily history log (append only, NEW) =====
-store.set('HISTORY_LOG', [])
-
 function normalizePhone(p) {
   return p.replace(/\D/g, '')
 }
@@ -78,14 +75,9 @@ async function isAdmin(ctx) {
 
 // ===== Message Listener =====
 bot.on('text', async ctx => {
-
-  // ===== IMPORTANT: allow commands to pass through =====
-  if (ctx.message.text.startsWith('/')) return
-
   const text = ctx.message.text
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
-
 
   // ===== Reset logic =====
   if (data.day !== today()) {
@@ -109,28 +101,35 @@ bot.on('text', async ctx => {
 
   phones.forEach(p => {
     const np = normalizePhone(p)
-    if (history.phones.has(np) || data.phonesMonth.has(np)) {
+    if (
+      history.phones.has(np) ||
+      data.phonesMonth.has(np)
+    ) {
       dupCount++
       dupList.push(np)
     } else {
       data.phonesDay.add(np)
       data.phonesMonth.add(np)
-      history.phones.add(np)
+      history.phones.add(np) // 只加，不删除
     }
   })
 
   users.forEach(u => {
     const nu = u.toLowerCase()
-    if (history.users.has(nu) || data.usersMonth.has(nu)) {
+    if (
+      history.users.has(nu) ||
+      data.usersMonth.has(nu)
+    ) {
       dupCount++
       dupList.push(nu)
     } else {
       data.usersDay.add(nu)
       data.usersMonth.add(nu)
-      history.users.add(nu)
+      history.users.add(nu) // 只加，不删除
     }
   })
 
+  // ===== Auto reply for ANY message =====
   const now = new Date().toLocaleString('en-US', {
     timeZone: 'Asia/Yangon'
   })
@@ -144,25 +143,8 @@ bot.on('text', async ctx => {
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
 📅 Time: ${now}`
 
+
   await ctx.reply(msg)
-
-// ===== Append history log (FIXED: record per-message data) =====
-store.get('HISTORY_LOG').push({
-  chatId: ctx.chat.id,
-  userId: ctx.from.id,
-  username: ctx.from.username || '',
-  name: `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim(),
-  date: today(),
-  time: now,
-
-  // ⚠️ 关键修改点在这里
-  phones: phones,          // 本条消息提取到的
-  users: users,            // 本条消息提取到的
-
-  dailyIncrease: phones.length + users.length,
-  monthlyTotal: data.phonesMonth.size + data.usersMonth.size
-  })
-
 })
 
 // ===== Export (Admin Only) =====
@@ -185,50 +167,6 @@ bot.command('export', async ctx => {
   const file = 'export.xlsx'
   XLSX.writeFile(wb, file)
   await ctx.replyWithDocument({ source: file })
-})
-
-// ===== History Download (Admin Only, NEW) =====
-bot.command('history', async ctx => {
-  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
-
-  const args = ctx.message.text.split(' ').slice(1)
-  if (args.length < 2) {
-    return ctx.reply('⚠️ Usage:\n/history <userId | @username> <YYYY-MM-DD>')
-  }
-
-  const [userKey, date] = args
-  const logs = store.get('HISTORY_LOG')
-
-  const filtered = logs.filter(l => {
-    const matchUser = userKey.startsWith('@')
-      ? `@${l.username}` === userKey
-      : String(l.userId) === userKey
-    return matchUser && l.date === date
-  })
-
-  if (!filtered.length) {
-    return ctx.reply('❌ No history found')
-  }
-
-  const r = filtered[filtered.length - 1]
-
-  const content =
-`📚 HISTORY RECORD
-👤 User: ${r.name} (${r.userId}) ${r.username ? '@' + r.username : ''}
-📱 PHONES:
-${r.phones.join('\n') || 'None'}
-👤 USERNAMES:
-${r.users.join('\n') || 'None'}
-📱 Phone Numbers Today: ${r.phones.length}
-@ Username Count Today: ${r.users.length}
-📈 Daily Increase: ${r.dailyIncrease}
-📊 Monthly Total: ${r.monthlyTotal}
-📅 Time: ${r.time}
-`
-
-  const filename = `history_${r.userId}_${date}.txt`
-  fs.writeFileSync(filename, content, 'utf8')
-  await ctx.replyWithDocument({ source: filename })
 })
 
 // ===== Start =====
