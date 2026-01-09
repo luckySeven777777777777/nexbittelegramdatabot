@@ -13,6 +13,10 @@ store.set('HISTORY', {
   users: new Set()
 })
 
+// ===== Day log store (NEW) =====
+// key: chatId:userId:YYYY-MM-DD
+store.set('DAY_LOG', new Map())
+
 function normalizePhone(p) {
   return p.replace(/\D/g, '')
 }
@@ -58,8 +62,8 @@ function getUser(chatId, userId) {
   return store.get(key)
 }
 
-const today = () => new Date().toISOString().slice(0,10)
-const month = () => new Date().toISOString().slice(0,7)
+const today = () => new Date().toISOString().slice(0, 10)
+const month = () => new Date().toISOString().slice(0, 7)
 
 const extractPhones = t => t.match(/\b\d{7,15}\b/g) || []
 const extractMentions = t => t.match(/@[a-zA-Z0-9_]{3,32}/g) || []
@@ -78,6 +82,7 @@ bot.on('text', async ctx => {
   const text = ctx.message.text
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
+  const dayLog = store.get('DAY_LOG')
 
   // ===== Reset logic =====
   if (data.day !== today()) {
@@ -111,6 +116,13 @@ bot.on('text', async ctx => {
       data.phonesDay.add(np)
       data.phonesMonth.add(np)
       history.phones.add(np) // 只加，不删除
+
+      // ===== NEW: day log =====
+      const key = `${ctx.chat.id}:${ctx.from.id}:${today()}`
+      if (!dayLog.has(key)) {
+        dayLog.set(key, { phones: new Set(), users: new Set() })
+      }
+      dayLog.get(key).phones.add(np)
     }
   })
 
@@ -126,6 +138,13 @@ bot.on('text', async ctx => {
       data.usersDay.add(nu)
       data.usersMonth.add(nu)
       history.users.add(nu) // 只加，不删除
+
+      // ===== NEW: day log =====
+      const key = `${ctx.chat.id}:${ctx.from.id}:${today()}`
+      if (!dayLog.has(key)) {
+        dayLog.set(key, { phones: new Set(), users: new Set() })
+      }
+      dayLog.get(key).users.add(nu)
     }
   })
 
@@ -143,7 +162,6 @@ bot.on('text', async ctx => {
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
 📅 Time: ${now}`
 
-
   await ctx.reply(msg)
 })
 
@@ -153,7 +171,7 @@ bot.command('export', async ctx => {
 
   const rows = []
   for (const [k, v] of store.entries()) {
-    if (k === 'HISTORY') continue
+    if (k === 'HISTORY' || k === 'DAY_LOG') continue
     rows.push({
       key: k,
       phones_month: v.phonesMonth.size,
@@ -166,6 +184,48 @@ bot.command('export', async ctx => {
   XLSX.utils.book_append_sheet(wb, ws, 'stats')
   const file = 'export.xlsx'
   XLSX.writeFile(wb, file)
+  await ctx.replyWithDocument({ source: file })
+})
+
+// ===== Download by user & date (Admin Only) =====
+bot.command('download', async ctx => {
+  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
+
+  const parts = ctx.message.text.split(' ')
+  if (parts.length !== 3) {
+    return ctx.reply('❗ Usage: /download <userId> <YYYY-MM-DD>')
+  }
+
+  const [, userId, date] = parts
+  const key = `${ctx.chat.id}:${userId}:${date}`
+
+  const dayLog = store.get('DAY_LOG')
+  if (!dayLog.has(key)) {
+    return ctx.reply('⚠️ No data found for this user and date')
+  }
+
+  const data = dayLog.get(key)
+  const rows = []
+
+  data.phones.forEach(p => {
+    rows.push({ type: 'phone', value: p, date, userId })
+  })
+
+  data.users.forEach(u => {
+    rows.push({ type: 'username', value: u, date, userId })
+  })
+
+  if (!rows.length) {
+    return ctx.reply('⚠️ Empty data')
+  }
+
+  const ws = XLSX.utils.json_to_sheet(rows)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'data')
+
+  const file = `download_${userId}_${date}.xlsx`
+  XLSX.writeFile(wb, file)
+
   await ctx.replyWithDocument({ source: file })
 })
 
