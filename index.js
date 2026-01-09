@@ -4,28 +4,27 @@ import fs from 'fs'
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 
-// ===== In-memory store (Railway safe, simple) =====
+// ===== In-memory store =====
 const store = new Map()
 
-// ===== History store (global, preload) =====
+// ===== History store =====
 store.set('HISTORY', {
   phones: new Set(),
   users: new Set()
 })
 
+// ===== Order Logs (NEW) =====
+store.set('LOGS', [])
+
 function normalizePhone(p) {
   return p.replace(/\D/g, '')
 }
 
-// ===== Load history.txt once at startup =====
+// ===== Load history.txt =====
 function preloadHistory(file = 'history.txt') {
-  if (!fs.existsSync(file)) {
-    console.log('⚠️ history.txt not found, skip preload')
-    return
-  }
+  if (!fs.existsSync(file)) return
 
   const text = fs.readFileSync(file, 'utf8')
-
   const rawPhones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
   const rawUsers = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
 
@@ -37,10 +36,6 @@ function preloadHistory(file = 'history.txt') {
   })
 
   rawUsers.forEach(u => history.users.add(u.toLowerCase()))
-
-  console.log(
-    `📚 History loaded: ${history.phones.size} phones, ${history.users.size} usernames`
-  )
 }
 
 function getUser(chatId, userId) {
@@ -78,8 +73,8 @@ bot.on('text', async ctx => {
   const text = ctx.message.text
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
+  const logs = store.get('LOGS')
 
-  // ===== Reset logic =====
   if (data.day !== today()) {
     data.day = today()
     data.phonesDay.clear()
@@ -92,7 +87,6 @@ bot.on('text', async ctx => {
     data.usersMonth.clear()
   }
 
-  // ===== Extract =====
   const phones = extractPhones(text)
   const users = extractMentions(text)
 
@@ -101,37 +95,48 @@ bot.on('text', async ctx => {
 
   phones.forEach(p => {
     const np = normalizePhone(p)
-    if (
-      history.phones.has(np) ||
-      data.phonesMonth.has(np)
-    ) {
+    if (history.phones.has(np) || data.phonesMonth.has(np)) {
       dupCount++
       dupList.push(np)
     } else {
       data.phonesDay.add(np)
       data.phonesMonth.add(np)
-      history.phones.add(np) // 只加，不删除
+      history.phones.add(np)
     }
   })
 
   users.forEach(u => {
     const nu = u.toLowerCase()
-    if (
-      history.users.has(nu) ||
-      data.usersMonth.has(nu)
-    ) {
+    if (history.users.has(nu) || data.usersMonth.has(nu)) {
       dupCount++
       dupList.push(nu)
     } else {
       data.usersDay.add(nu)
       data.usersMonth.add(nu)
-      history.users.add(nu) // 只加，不删除
+      history.users.add(nu)
     }
   })
 
-  // ===== Auto reply for ANY message =====
   const now = new Date().toLocaleString('en-US', {
     timeZone: 'Asia/Yangon'
+  })
+
+  // ===== SAVE LOG (NEW) =====
+  logs.push({
+    date: today(),
+    time: now,
+    chatId: ctx.chat.id,
+    userId: ctx.from.id,
+    username: ctx.from.username ? '@' + ctx.from.username : '',
+    name: `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim(),
+
+    phoneToday: data.phonesDay.size,
+    usernameToday: data.usersDay.size,
+    dailyIncrease: data.phonesDay.size + data.usersDay.size,
+    monthlyTotal: data.phonesMonth.size + data.usersMonth.size,
+
+    duplicateCount: dupCount,
+    duplicateList: dupList.join(', ')
   })
 
   const msg =
@@ -143,28 +148,29 @@ bot.on('text', async ctx => {
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
 📅 Time: ${now}`
 
-
   await ctx.reply(msg)
 })
 
-// ===== Export (Admin Only) =====
+// ===== Export Orders (Admin Only) =====
 bot.command('export', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
-  const rows = []
-  for (const [k, v] of store.entries()) {
-    if (k === 'HISTORY') continue
-    rows.push({
-      key: k,
-      phones_month: v.phonesMonth.size,
-      users_month: v.usersMonth.size
-    })
-  }
+  const arg = ctx.message.text.split(' ')[1] || 'all'
+  const logs = store.get('LOGS')
 
-  const ws = XLSX.utils.json_to_sheet(rows)
+  const data = logs.filter(l =>
+    arg === 'all' ||
+    l.date === arg ||
+    l.date.startsWith(arg)
+  )
+
+  if (!data.length) return ctx.reply('⚠️ No data')
+
+  const ws = XLSX.utils.json_to_sheet(data)
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'stats')
-  const file = 'export.xlsx'
+  XLSX.utils.book_append_sheet(wb, ws, 'Orders')
+
+  const file = `orders_${arg}.xlsx`
   XLSX.writeFile(wb, file)
   await ctx.replyWithDocument({ source: file })
 })
