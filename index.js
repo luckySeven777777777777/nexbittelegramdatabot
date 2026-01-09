@@ -1,8 +1,16 @@
 import { Telegraf, Markup } from 'telegraf'
 import XLSX from 'xlsx'
 import fs from 'fs'
+import http from 'http'
+import path from 'path'
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
+
+// ===== 基础配置 =====
+const EXPORT_DIR = './exports'
+const DOWNLOAD_BASE = process.env.DOWNLOAD_BASE || 'http://localhost:3000'
+
+if (!fs.existsSync(EXPORT_DIR)) fs.mkdirSync(EXPORT_DIR)
 
 // ===== In-memory store =====
 const store = new Map()
@@ -13,34 +21,22 @@ store.set('HISTORY', {
   users: new Set()
 })
 
+// ===== 每日消息明细（用于按日导出）=====
+store.set('DAILY_LOG', new Map()) // date -> [{ user, phone, username, time }]
+
 function normalizePhone(p) {
   return p.replace(/\D/g, '')
 }
 
 // ===== Load history.txt =====
 function preloadHistory(file = 'history.txt') {
-  if (!fs.existsSync(file)) {
-    console.log('⚠️ history.txt not found, skip preload')
-    return
-  }
+  if (!fs.existsSync(file)) return
 
   const text = fs.readFileSync(file, 'utf8')
-
-  const rawPhones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
-  const rawUsers = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
-
   const history = store.get('HISTORY')
 
-  rawPhones.forEach(p => {
-    const n = normalizePhone(p)
-    if (n.length >= 7) history.phones.add(n)
-  })
-
-  rawUsers.forEach(u => history.users.add(u.toLowerCase()))
-
-  console.log(
-    `📚 History loaded: ${history.phones.size} phones, ${history.users.size} usernames`
-  )
+  ;(text.match(/\b\d{7,15}\b/g) || []).forEach(p => history.phones.add(normalizePhone(p)))
+  ;(text.match(/@[a-zA-Z0-9_]{3,32}/g) || []).forEach(u => history.users.add(u.toLowerCase()))
 }
 
 const today = () => new Date().toISOString().slice(0, 10)
@@ -73,20 +69,19 @@ async function isAdmin(ctx) {
   }
 }
 
-// ===== Message Listener =====
+// ===== 消息监听 =====
 bot.on('text', async ctx => {
   const text = ctx.message.text
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
+  const date = today()
 
-  // reset day
-  if (data.day !== today()) {
-    data.day = today()
+  if (data.day !== date) {
+    data.day = date
     data.phonesDay.clear()
     data.usersDay.clear()
   }
 
-  // reset month
   if (data.month !== monthNow()) {
     data.month = monthNow()
     data.phonesMonth.clear()
@@ -96,98 +91,97 @@ bot.on('text', async ctx => {
   const phones = extractPhones(text)
   const users = extractMentions(text)
 
-  let dupCount = 0
-  let dupList = []
+  if (!store.get('DAILY_LOG').has(date)) {
+    store.get('DAILY_LOG').set(date, [])
+  }
 
   phones.forEach(p => {
     const np = normalizePhone(p)
-    if (history.phones.has(np) || data.phonesMonth.has(np)) {
-      dupCount++
-      dupList.push(np)
-    } else {
+    if (!history.phones.has(np)) {
       data.phonesDay.add(np)
       data.phonesMonth.add(np)
       history.phones.add(np)
+
+      store.get('DAILY_LOG').get(date).push({
+        user: ctx.from.id,
+        phone: np,
+        username: '',
+        time: new Date().toISOString()
+      })
     }
   })
 
   users.forEach(u => {
     const nu = u.toLowerCase()
-    if (history.users.has(nu) || data.usersMonth.has(nu)) {
-      dupCount++
-      dupList.push(nu)
-    } else {
+    if (!history.users.has(nu)) {
       data.usersDay.add(nu)
       data.usersMonth.add(nu)
       history.users.add(nu)
+
+      store.get('DAILY_LOG').get(date).push({
+        user: ctx.from.id,
+        phone: '',
+        username: nu,
+        time: new Date().toISOString()
+      })
     }
   })
-
-  const now = new Date().toLocaleString('en-US', {
-    timeZone: 'Asia/Yangon'
-  })
-
-  const msg =
-`👤 User: ${ctx.from.first_name || ''} ${ctx.from.last_name || ''} (${ctx.from.id})
-📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
-📱 Phone Numbers Today: ${data.phonesDay.size}
-@ Username Count Today: ${data.usersDay.size}
-📈 Daily Increase: ${data.phonesDay.size + data.usersDay.size}
-📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
-📅 Time: ${now}`
-
-  await ctx.reply(msg)
 })
 
-// ===== /month panel (Admin) =====
+// ===== /month 面板 =====
 bot.command('month', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
-  const m = monthNow()
-
-  await ctx.reply(
-`📊 Monthly Order Panel
-📅 Month: ${m}
-
-请选择操作：`,
-    Markup.inlineKeyboard([
-      [Markup.button.callback('📤 Export', `EXPORT:${m}`)]
-    ])
-})
-
-// ===== Export callback =====
-bot.action(/EXPORT:(.+)/, async ctx => {
-  if (!(await isAdmin(ctx))) {
-    return ctx.answerCbQuery('Admin only')
+  const buttons = []
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10)
+    buttons.push([Markup.button.callback(`📅 ${d}`, `EXPORT_DAY:${d}`)])
   }
 
-  const m = ctx.match[1]
-  const rows = []
+  await ctx.reply(
+    '📊 请选择要导出的日期：',
+    Markup.inlineKeyboard(buttons)
+  )
+})
 
-  for (const [k, v] of store.entries()) {
-    if (k === 'HISTORY') continue
+// ===== 导出指定日期 =====
+bot.action(/EXPORT_DAY:(.+)/, async ctx => {
+  if (!(await isAdmin(ctx))) return ctx.answerCbQuery('Admin only')
 
-    rows.push({
-      user: k,
-      phone_month: v.phonesMonth.size,
-      username_month: v.usersMonth.size,
-      total: v.phonesMonth.size + v.usersMonth.size,
-      month: m
-    })
+  const date = ctx.match[1]
+  const rows = store.get('DAILY_LOG').get(date) || []
+
+  if (!rows.length) {
+    return ctx.reply(`⚠️ ${date} 没有数据`)
   }
 
   const ws = XLSX.utils.json_to_sheet(rows)
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Monthly Stats')
+  XLSX.utils.book_append_sheet(wb, ws, 'Details')
 
-  const file = `export_${m}.xlsx`
+  const file = `${EXPORT_DIR}/orders_${date}.xlsx`
   XLSX.writeFile(wb, file)
 
-  await ctx.replyWithDocument({ source: file })
-  await ctx.answerCbQuery('✅ Exported')
+  const link = `${DOWNLOAD_BASE}/downloads/orders_${date}.xlsx`
+  await ctx.reply(`✅ 导出完成\n📥 下载链接：\n${link}`)
+  await ctx.answerCbQuery('OK')
 })
+
+// ===== HTTP 下载服务 =====
+http.createServer((req, res) => {
+  if (req.url.startsWith('/downloads/')) {
+    const file = path.join(EXPORT_DIR, req.url.replace('/downloads/', ''))
+    if (fs.existsSync(file)) {
+      res.writeHead(200)
+      fs.createReadStream(file).pipe(res)
+    } else {
+      res.writeHead(404)
+      res.end('Not found')
+    }
+  }
+}).listen(3000)
 
 // ===== Start =====
 preloadHistory()
 bot.launch()
-console.log('✅ Bot running on Railway')
+console.log('✅ Bot running with calendar export + download link')
