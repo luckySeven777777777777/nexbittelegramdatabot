@@ -78,9 +78,14 @@ async function isAdmin(ctx) {
 
 // ===== Message Listener =====
 bot.on('text', async ctx => {
+
+  // ===== IMPORTANT: allow commands to pass through =====
+  if (ctx.message.text.startsWith('/')) return
+
   const text = ctx.message.text
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
+
 
   // ===== Reset logic =====
   if (data.day !== today()) {
