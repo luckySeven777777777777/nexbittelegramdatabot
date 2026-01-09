@@ -162,11 +162,9 @@ bot.on('text', async ctx => {
   await ctx.reply(msg)
 })
 
-// ===== Export Orders (FIXED & STABLE) =====
-bot.command('export', async ctx => {
-  if (!(await isAdmin(ctx))) {
-    return ctx.reply('❌ Admin only')
-  }
+// ===== Export Orders (PUBLIC & FIXED) =====
+bot.command(['export', 'export@nexbittelegramdatabot'], async ctx => {
+  // ⛔ 不再限制管理员
 
   const args = ctx.message.text.trim().split(/\s+/)
   const arg = args[1] || 'all'
@@ -196,7 +194,7 @@ bot.command('export', async ctx => {
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Orders')
 
-  // ✅ 关键修复：用 Buffer，不落盘
+  // ✅ Buffer 方式（云端 100% 稳）
   const buffer = XLSX.write(wb, {
     bookType: 'xlsx',
     type: 'buffer'
