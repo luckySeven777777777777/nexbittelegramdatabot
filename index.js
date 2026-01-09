@@ -1,52 +1,56 @@
-import { Telegraf, Markup } from 'telegraf'
+import { Telegraf } from 'telegraf'
 import XLSX from 'xlsx'
 import fs from 'fs'
+import Papa from 'papaparse'
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 
-// ===== In-memory store (Railway safe, simple) =====
+// ================= Store =================
 const store = new Map()
 
-// ===== History store (global, preload) =====
 store.set('HISTORY', {
   phones: new Set(),
   users: new Set()
 })
 
+store.set('LOGS', []) // 👈 CSV 明细日志
+
+// ================= Utils =================
+const today = () => new Date().toISOString().slice(0, 10)
+const month = () => new Date().toISOString().slice(0, 7)
+
 function normalizePhone(p) {
   return p.replace(/\D/g, '')
 }
 
-// ===== Load history.txt once at startup =====
+const extractPhones = t => t.match(/\b\d{7,15}\b/g) || []
+const extractMentions = t => t.match(/@[a-zA-Z0-9_]{3,32}/g) || []
+
+// ================= History preload =================
 function preloadHistory(file = 'history.txt') {
-  if (!fs.existsSync(file)) {
-    console.log('⚠️ history.txt not found, skip preload')
-    return
-  }
+  if (!fs.existsSync(file)) return
 
   const text = fs.readFileSync(file, 'utf8')
-
-  const rawPhones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
-  const rawUsers = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
-
   const history = store.get('HISTORY')
 
-  rawPhones.forEach(p => {
-    const n = normalizePhone(p)
-    if (n.length >= 7) history.phones.add(n)
-  })
+  extractPhones(text).forEach(p =>
+    history.phones.add(normalizePhone(p))
+  )
 
-  rawUsers.forEach(u => history.users.add(u.toLowerCase()))
-
-  console.log(
-    `📚 History loaded: ${history.phones.size} phones, ${history.users.size} usernames`
+  extractMentions(text).forEach(u =>
+    history.users.add(u.toLowerCase())
   )
 }
 
-function getUser(chatId, userId) {
-  const key = `${chatId}:${userId}`
+// ================= User =================
+function getUser(chatId, user) {
+  const key = `${chatId}:${user.id}`
   if (!store.has(key)) {
     store.set(key, {
+      chatId,
+      userId: user.id,
+      name:
+        `${user.first_name || ''} ${user.last_name || ''}`.trim(),
       day: today(),
       month: month(),
       phonesDay: new Set(),
@@ -58,12 +62,7 @@ function getUser(chatId, userId) {
   return store.get(key)
 }
 
-const today = () => new Date().toISOString().slice(0, 10)
-const month = () => new Date().toISOString().slice(0, 7)
-
-const extractPhones = t => t.match(/\b\d{7,15}\b/g) || []
-const extractMentions = t => t.match(/@[a-zA-Z0-9_]{3,32}/g) || []
-
+// ================= Admin =================
 async function isAdmin(ctx) {
   try {
     const m = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id)
@@ -73,52 +72,47 @@ async function isAdmin(ctx) {
   }
 }
 
-// ===== Message Listener =====
+// ================= Message Listener =================
 bot.on('text', async ctx => {
   const text = ctx.message.text
-  const data = getUser(ctx.chat.id, ctx.from.id)
+  const user = getUser(ctx.chat.id, ctx.from)
   const history = store.get('HISTORY')
 
-  // ===== Reset logic =====
-  if (data.day !== today()) {
-    data.day = today()
-    data.phonesDay.clear()
-    data.usersDay.clear()
+  if (user.day !== today()) {
+    user.day = today()
+    user.phonesDay.clear()
+    user.usersDay.clear()
   }
 
-  if (data.month !== month()) {
-    data.month = month()
-    data.phonesMonth.clear()
-    data.usersMonth.clear()
+  if (user.month !== month()) {
+    user.month = month()
+    user.phonesMonth.clear()
+    user.usersMonth.clear()
   }
-
-  // ===== Extract =====
-  const phones = extractPhones(text)
-  const users = extractMentions(text)
 
   let dupCount = 0
   let dupList = []
 
-  phones.forEach(p => {
+  extractPhones(text).forEach(p => {
     const np = normalizePhone(p)
-    if (history.phones.has(np) || data.phonesMonth.has(np)) {
+    if (history.phones.has(np) || user.phonesMonth.has(np)) {
       dupCount++
       dupList.push(np)
     } else {
-      data.phonesDay.add(np)
-      data.phonesMonth.add(np)
+      user.phonesDay.add(np)
+      user.phonesMonth.add(np)
       history.phones.add(np)
     }
   })
 
-  users.forEach(u => {
+  extractMentions(text).forEach(u => {
     const nu = u.toLowerCase()
-    if (history.users.has(nu) || data.usersMonth.has(nu)) {
+    if (history.users.has(nu) || user.usersMonth.has(nu)) {
       dupCount++
       dupList.push(nu)
     } else {
-      data.usersDay.add(nu)
-      data.usersMonth.add(nu)
+      user.usersDay.add(nu)
+      user.usersMonth.add(nu)
       history.users.add(nu)
     }
   })
@@ -127,92 +121,72 @@ bot.on('text', async ctx => {
     timeZone: 'Asia/Yangon'
   })
 
-  const msg =
-`👤 User: ${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''} ${ctx.from.id}
-📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
-📱 Phone Numbers Today: ${data.phonesDay.size}
-@ Username Count Today: ${data.usersDay.size}
-📈 Daily Increase: ${data.phonesDay.size + data.usersDay.size}
-📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
-📅 Time: ${now}`
+  // ===== 记录 CSV 明细 =====
+  store.get('LOGS').push({
+    user_name: user.name,
+    user_id: user.userId,
+    chat_id: user.chatId,
+    duplicate_count: dupCount,
+    duplicate_list: dupList.join(' | '),
+    phone_today: user.phonesDay.size,
+    username_today: user.usersDay.size,
+    daily_increase: user.phonesDay.size + user.usersDay.size,
+    monthly_total: user.phonesMonth.size + user.usersMonth.size,
+    time: now,
+    date: today(),
+    month: month()
+  })
 
-  await ctx.reply(msg)
-})
-
-
-// ===== /month command (with Export button) =====
-bot.command('month', async ctx => {
-  const data = getUser(ctx.chat.id, ctx.from.id)
-
-  const msg =
-`📊 Monthly Summary
-📱 Phone Numbers: ${data.phonesMonth.size}
-@ Usernames: ${data.usersMonth.size}
-📈 Total: ${data.phonesMonth.size + data.usersMonth.size}`
-
+  // ===== Reply =====
   await ctx.reply(
-    msg,
-    Markup.inlineKeyboard([
-      Markup.button.callback('📥 Export', 'EXPORT_DATA')
-    ])
+`👤 User: ${user.name} ${user.userId}
+📝 Duplicate: ${dupCount ? dupList.join(', ') : 'None'}
+📱 Phone Numbers Today: ${user.phonesDay.size}
+@ Username Count Today: ${user.usersDay.size}
+📈 Daily Increase: ${user.phonesDay.size + user.usersDay.size}
+📊 Monthly Total: ${user.phonesMonth.size + user.usersMonth.size}
+📅 Time: ${now}`
   )
 })
 
-
-// ===== Export Button Handler (Admin Only) =====
-bot.action('EXPORT_DATA', async ctx => {
-  await ctx.answerCbQuery()
-
-  if (!(await isAdmin(ctx))) {
-    return ctx.reply('❌ Admin only')
-  }
-
-  const rows = []
-  for (const [k, v] of store.entries()) {
-    if (k === 'HISTORY') continue
-    rows.push({
-      key: k,
-      phones_month: v.phonesMonth.size,
-      users_month: v.usersMonth.size
-    })
-  }
-
-  const ws = XLSX.utils.json_to_sheet(rows)
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'stats')
-
-  const file = 'export.xlsx'
-  XLSX.writeFile(wb, file)
-
-  await ctx.replyWithDocument({ source: file })
-})
-
-
-// ===== /export command (Admin Only, manual) =====
+// ================= Export =================
 bot.command('export', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
-  const rows = []
-  for (const [k, v] of store.entries()) {
-    if (k === 'HISTORY') continue
-    rows.push({
-      key: k,
-      phones_month: v.phonesMonth.size,
-      users_month: v.usersMonth.size
-    })
+  const args = ctx.message.text.split(' ')
+  const logs = store.get('LOGS')
+
+  const mode = args.includes('today')
+    ? 'today'
+    : args.includes('month')
+    ? 'month'
+    : 'all'
+
+  const csvOnly = args.includes('csv')
+
+  const filtered = logs.filter(r =>
+    mode === 'today'
+      ? r.date === today()
+      : mode === 'month'
+      ? r.month === month()
+      : true
+  )
+
+  if (csvOnly) {
+    const csv = Papa.unparse(filtered)
+    fs.writeFileSync('export.csv', csv)
+    return ctx.replyWithDocument({ source: 'export.csv' })
   }
 
-  const ws = XLSX.utils.json_to_sheet(rows)
+  const ws = XLSX.utils.json_to_sheet(filtered)
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'stats')
+  XLSX.utils.book_append_sheet(wb, ws, 'logs')
+  XLSX.writeFile(wb, 'export.xlsx')
 
-  const file = 'export.xlsx'
-  XLSX.writeFile(wb, file)
-  await ctx.replyWithDocument({ source: file })
+  await ctx.replyWithDocument({ source: 'export.xlsx' })
 })
 
-
-// ===== Start =====
+// ================= Start =================
 preloadHistory()
 bot.launch()
-console.log('✅ Bot running on Railway')
+console.log('✅ Bot running')
