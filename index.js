@@ -166,20 +166,29 @@ bot.action(/EXPORT_DAY:(.+)/, async ctx => {
   await ctx.reply(`✅ 导出完成\n📥 下载链接：\n${link}`)
   await ctx.answerCbQuery('OK')
 })
+// ===== HTTP 下载服务（Railway 兼容）=====
+const PORT = process.env.PORT || 3000
 
-// ===== HTTP 下载服务 =====
 http.createServer((req, res) => {
   if (req.url.startsWith('/downloads/')) {
     const file = path.join(EXPORT_DIR, req.url.replace('/downloads/', ''))
+
     if (fs.existsSync(file)) {
-      res.writeHead(200)
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream'
+      })
       fs.createReadStream(file).pipe(res)
     } else {
       res.writeHead(404)
       res.end('Not found')
     }
+  } else {
+    res.writeHead(404)
+    res.end('Invalid path')
   }
-}).listen(3000)
+}).listen(PORT, () => {
+  console.log(`📥 Download server running on port ${PORT}`)
+})
 
 // ===== Start =====
 preloadHistory()
