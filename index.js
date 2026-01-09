@@ -3,10 +3,10 @@ import XLSX from 'xlsx'
 import fs from 'fs'
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
-const HISTORY_FILE = 'history.json'
 
 // ================== STORE ==================
 const store = new Map()
+
 store.set('HISTORY', {
   phones: new Set(),
   users: new Set()
@@ -24,15 +24,12 @@ function getUser(chatId, userId) {
   const key = `${chatId}:${userId}`
   if (!store.has(key)) {
     store.set(key, {
-      first_name: '',
       day: today(),
       month: month(),
       phonesDay: new Set(),
       usersDay: new Set(),
       phonesMonth: new Set(),
-      usersMonth: new Set(),
-      dupPhonesDay: new Set(),
-      dupUsersDay: new Set()
+      usersMonth: new Set()
     })
   }
   return store.get(key)
@@ -47,54 +44,27 @@ async function isAdmin(ctx) {
   }
 }
 
-// ================== LOAD / SAVE HISTORY ==================
-function saveHistory() {
-  const data = {}
-  for (const [key, val] of store.entries()) {
-    if (key === 'HISTORY') continue
-    data[key] = {
-      first_name: val.first_name,
-      day: val.day,
-      month: val.month,
-      phonesDay: Array.from(val.phonesDay),
-      usersDay: Array.from(val.usersDay),
-      phonesMonth: Array.from(val.phonesMonth),
-      usersMonth: Array.from(val.usersMonth),
-      dupPhonesDay: Array.from(val.dupPhonesDay),
-      dupUsersDay: Array.from(val.dupUsersDay)
-    }
-  }
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(data, null, 2), 'utf8')
+// ================== PRELOAD HISTORY ==================
+function preloadHistory(file = 'history.txt') {
+  if (!fs.existsSync(file)) return
+
+  const text = fs.readFileSync(file, 'utf8')
+  const history = store.get('HISTORY')
+
+  const phones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
+  const users = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
+
+  phones.forEach(p => {
+    const n = normalizePhone(p)
+    if (n.length >= 7) history.phones.add(n)
+  })
+
+  users.forEach(u => history.users.add(u.toLowerCase()))
+
+  console.log(`📚 History loaded: ${history.phones.size} phones, ${history.users.size} users`)
 }
 
-function preloadHistory() {
-  if (!fs.existsSync(HISTORY_FILE)) return
-  const raw = fs.readFileSync(HISTORY_FILE, 'utf8')
-  const json = JSON.parse(raw)
-  const globalHistory = store.get('HISTORY')
-
-  for (const [key, val] of Object.entries(json)) {
-    const obj = {
-      first_name: val.first_name || '',
-      day: val.day || today(),
-      month: val.month || month(),
-      phonesDay: new Set(val.phonesDay || []),
-      usersDay: new Set(val.usersDay || []),
-      phonesMonth: new Set(val.phonesMonth || []),
-      usersMonth: new Set(val.usersMonth || []),
-      dupPhonesDay: new Set(val.dupPhonesDay || []),
-      dupUsersDay: new Set(val.dupUsersDay || [])
-    }
-    store.set(key, obj)
-    // 更新全局历史
-    val.phonesMonth?.forEach(p => globalHistory.phones.add(p))
-    val.usersMonth?.forEach(u => globalHistory.users.add(u))
-  }
-
-  console.log('✅ History loaded from JSON:', globalHistory.phones.size, 'phones,', globalHistory.users.size, 'users')
-}
-
-// ================== COMMANDS ==================
+// ================== COMMANDS (一定要在前面) ==================
 
 // ---- EXPORT STATS ----
 bot.command('export', async ctx => {
@@ -120,51 +90,55 @@ bot.command('export', async ctx => {
   fs.unlinkSync(file)
 })
 
-// ---- HISTORY DOWNLOAD ----
+// ---- DOWNLOAD HISTORY TXT (改造版) ----
 bot.command('history', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
+  // 解析参数：/history [userId] [YYYY-MM-DD]
   const args = ctx.message.text.split(' ').slice(1)
-  let targetUserId = null
-  let targetDate = null
+  const targetUser = args[0] || null
+  const targetDate = args[1] || null
 
-  if (args[0] && /^\d+$/.test(args[0])) targetUserId = args[0]
-  if (args[1] && /^\d{4}-\d{2}-\d{2}$/.test(args[1])) targetDate = args[1]
+  const history = store.get('HISTORY')
+  let usersToShow = []
+  let phonesToShow = []
 
-  let rows = []
-  const globalHistory = store.get('HISTORY')
+  // 如果指定了用户和日期
+  if (targetUser && targetDate) {
+    // 从 store 找到对应 key
+    const key = `${ctx.chat.id}:${targetUser}`
+    const data = store.get(key)
+    if (!data) return ctx.reply('❌ No data for this user')
 
-  for (const [key, data] of store.entries()) {
-    if (key === 'HISTORY') continue
-    const [chatId, userId] = key.split(':')
-    if (targetUserId && targetUserId !== userId) continue
-    if (targetDate && data.day !== targetDate) continue
+    const dayPhones = data.day === targetDate ? [...data.phonesDay] : []
+    const dayUsers = data.day === targetDate ? [...data.usersDay] : []
 
-    rows.push({
-      user: data.first_name || userId,
-      phones_today: Array.from(data.phonesDay),
-      users_today: Array.from(data.usersDay),
-      dup_phones: Array.from(data.dupPhonesDay),
-      dup_users: Array.from(data.dupUsersDay),
-      daily_increase: data.phonesDay.size + data.usersDay.size,
-      monthly_total: data.phonesMonth.size + data.usersMonth.size,
-      time: data.day
-    })
+    usersToShow = dayUsers
+    phonesToShow = dayPhones
+  } else {
+    // 默认展示全部 HISTORY
+    usersToShow = [...history.users]
+    phonesToShow = [...history.phones]
   }
+
+  const now = new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
+
+  // 统计
+  const dailyIncrease = phonesToShow.length + usersToShow.length
+  const monthlyTotal = Array.from(store.values())
+    .filter(v => v.phonesMonth && v.usersMonth)
+    .reduce((sum, v) => sum + v.phonesMonth.size + v.usersMonth.size, 0)
 
   let content = '📚 HISTORY RECORD\n\n'
-  for (const r of rows) {
-    content += `👤 User: ${r.user}\n`
-    content += `📱 PHONES: ${r.phones_today.length ? r.phones_today.join(', ') : 'None'}\n`
-    content += `📝 Duplicate: ${r.dup_phones.concat(r.dup_users).length ? r.dup_phones.concat(r.dup_users).join(', ') : 'None'}\n`
-    content += `👤 USERNAMES: ${r.users_today.length ? r.users_today.join(', ') : 'None'}\n`
-    content += `@ Username Count Today: ${r.users_today.length}\n`
-    content += `📈 Daily Increase: ${r.daily_increase}\n`
-    content += `📊 Monthly Total: ${r.monthly_total}\n`
-    content += `📅 Time: ${r.time}\n\n================\n\n`
-  }
-
-  if (!rows.length) content += 'No records found for given filters.'
+  content += `👤 User: ${targetUser || 'ALL'}\n`
+  content += `📱 PHONES:\n${phonesToShow.length ? phonesToShow.join('\n') : 'None'}\n`
+  content += `📝 Duplicate: None\n`  // 可选，如果想显示当日重复，可进一步统计
+  content += `👤 USERNAMES:\n${usersToShow.length ? usersToShow.join('\n') : 'None'}\n`
+  content += `📱 Phone Numbers Today: ${phonesToShow.length}\n`
+  content += `@ Username Count Today: ${usersToShow.length}\n`
+  content += `📈 Daily Increase: ${dailyIncrease}\n`
+  content += `📊 Monthly Total: ${monthlyTotal}\n`
+  content += `📅 Time: ${now}\n`
 
   const file = `history_download_${Date.now()}.txt`
   fs.writeFileSync(file, content, 'utf8')
@@ -172,21 +146,18 @@ bot.command('history', async ctx => {
   fs.unlinkSync(file)
 })
 
-// ================== TEXT LISTENER ==================
+// ================== TEXT LISTENER (最后) ==================
 bot.on('text', async ctx => {
   const text = ctx.message.text
-  if (text.startsWith('/')) return
+  if (text.startsWith('/')) return   // ⭐ 不吃命令
 
   const data = getUser(ctx.chat.id, ctx.from.id)
-  data.first_name = ctx.from.first_name || ''
-  const globalHistory = store.get('HISTORY')
+  const history = store.get('HISTORY')
 
   if (data.day !== today()) {
     data.day = today()
     data.phonesDay.clear()
     data.usersDay.clear()
-    data.dupPhonesDay.clear()
-    data.dupUsersDay.clear()
   }
 
   if (data.month !== month()) {
@@ -198,35 +169,40 @@ bot.on('text', async ctx => {
   const phones = extractPhones(text)
   const users = extractMentions(text)
 
+  let dupCount = 0
+  let dupList = []
+
   phones.forEach(p => {
     const np = normalizePhone(p)
-    if (globalHistory.phones.has(np) || data.phonesMonth.has(np)) {
-      data.dupPhonesDay.add(np)
+    if (history.phones.has(np) || data.phonesMonth.has(np)) {
+      dupCount++
+      dupList.push(np)
     } else {
       data.phonesDay.add(np)
       data.phonesMonth.add(np)
-      globalHistory.phones.add(np)
+      history.phones.add(np)
+      fs.appendFileSync('history.txt', np + '\n')
     }
   })
 
   users.forEach(u => {
     const nu = u.toLowerCase()
-    if (globalHistory.users.has(nu) || data.usersMonth.has(nu)) {
-      data.dupUsersDay.add(nu)
+    if (history.users.has(nu) || data.usersMonth.has(nu)) {
+      dupCount++
+      dupList.push(nu)
     } else {
       data.usersDay.add(nu)
       data.usersMonth.add(nu)
-      globalHistory.users.add(nu)
+      history.users.add(nu)
+      fs.appendFileSync('history.txt', nu + '\n')
     }
   })
-
-  saveHistory() // 每条消息后保存
 
   const now = new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
 
   await ctx.reply(
-`👤 User: ${data.first_name} ${ctx.from.id}
-📝 Duplicate: ${Array.from(data.dupPhonesDay).concat(Array.from(data.dupUsersDay)).length ? Array.from(data.dupPhonesDay).concat(Array.from(data.dupUsersDay)).join(', ') : 'None'}
+`👤 User: ${ctx.from.first_name || ''} ${ctx.from.id}
+📝 Duplicate: ${dupCount ? dupList.join(', ') : 'None'}
 📱 Phone Today: ${data.phonesDay.size}
 @ User Today: ${data.usersDay.size}
 📊 Month Total: ${data.phonesMonth.size + data.usersMonth.size}
@@ -237,4 +213,4 @@ bot.on('text', async ctx => {
 // ================== START ==================
 preloadHistory()
 bot.launch()
-console.log('✅ Bot running — history JSON persistent, /history works')
+console.log('✅ Bot running — /history works')
