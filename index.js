@@ -65,9 +65,6 @@ const extractPhones = t => t.match(/\b\d{7,15}\b/g) || []
 const extractMentions = t => t.match(/@[a-zA-Z0-9_]{3,32}/g) || []
 
 async function isAdmin(ctx) {
-  // 私聊直接放行
-  if (ctx.chat.type === 'private') return true
-
   try {
     const m = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id)
     return ['creator', 'administrator'].includes(m.status)
@@ -78,7 +75,6 @@ async function isAdmin(ctx) {
 
 // ===== Message Listener =====
 bot.on('text', async ctx => {
-  if (ctx.message.text.startsWith('/')) return
   const text = ctx.message.text
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
