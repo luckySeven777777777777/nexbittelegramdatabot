@@ -51,12 +51,12 @@ function preloadHistory(file = 'history.txt') {
   const text = fs.readFileSync(file, 'utf8')
   const history = store.get('HISTORY')
 
-  const phones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
+  const phones = text.match(/\b\d{7,15}\b/g) || []
   const users = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
 
   phones.forEach(p => {
-    const n = normalizePhone(p)
-    if (n.length >= 7) history.phones.add(n)
+    const np = normalizePhone(p)
+    if (np.length >= 7) history.phones.add(np)
   })
 
   users.forEach(u => history.users.add(u.toLowerCase()))
@@ -64,7 +64,7 @@ function preloadHistory(file = 'history.txt') {
   console.log(`📚 History loaded: ${history.phones.size} phones, ${history.users.size} users`)
 }
 
-// ================== COMMANDS (一定要在前面) ==================
+// ================== COMMANDS ==================
 
 // ---- EXPORT STATS ----
 bot.command('export', async ctx => {
@@ -114,46 +114,55 @@ bot.command('history_user', async ctx => {
 
   const args = ctx.message.text.split(' ')
   const targetUserId = args[1]
+  if (!targetUserId) return ctx.reply('❗ 用法: /history_user <userId>')
 
-  if (!targetUserId) {
-    return ctx.reply('❗ 用法: /history_user <userId>')
+  const history = store.get('HISTORY')
+
+  // ====== 先读取历史TXT ======
+  let filePhones = new Set()
+  let fileUsers = new Set()
+  if (fs.existsSync('history.txt')) {
+    const text = fs.readFileSync('history.txt', 'utf8')
+    const phones = text.match(/\b\d{7,15}\b/g) || []
+    const users = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
+
+    phones.forEach(p => filePhones.add(normalizePhone(p)))
+    users.forEach(u => fileUsers.add(u.toLowerCase()))
   }
 
-  let targetKey = null
-  let targetData = null
-
-  for (const [k, v] of store.entries()) {
-    if (k === 'HISTORY') continue
-    if (k.endsWith(`:${targetUserId}`)) {
-      targetKey = k
-      targetData = v
-      break
-    }
+  // ====== 内存中当天/当月数据 ======
+  const targetKey = `${ctx.chat.id}:${targetUserId}`
+  const targetData = store.get(targetKey) || {
+    phonesDay: new Set(),
+    usersDay: new Set(),
+    phonesMonth: new Set(),
+    usersMonth: new Set()
   }
 
-  if (!targetData) {
-    return ctx.reply('❌ 未找到该用户记录')
-  }
-
-  const now = new Date().toLocaleString('en-US', {
-    timeZone: 'Asia/Yangon'
-  })
-
+  // ====== 计算统计 ======
   const dailyPhones = targetData.phonesDay.size
   const dailyUsers = targetData.usersDay.size
   const dailyIncrease = dailyPhones + dailyUsers
-  const monthlyTotal = targetData.phonesMonth.size + targetData.usersMonth.size
 
+  const allPhones = new Set([...filePhones, ...targetData.phonesMonth])
+  const allUsers = new Set([...fileUsers, ...targetData.usersMonth])
+  const monthlyTotal = allPhones.size + allUsers.size
+
+  const duplicates = Math.max(0, monthlyTotal - dailyIncrease)
+
+  const now = new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
+
+  // ====== 构造内容 ======
   let content = `📚 HISTORY RECORD\n\n`
   content += `👤 User: ${targetUserId}\n\n`
 
   content += `📱 PHONES:\n`
-  content += dailyPhones ? [...targetData.phonesDay].join('\n') : 'None'
+  content += allPhones.size ? [...allPhones].join('\n') : 'None'
 
-  content += `\n\n📝 Duplicate: ⚠️ ${Math.max(0, monthlyTotal - dailyIncrease)}\n\n`
+  content += `\n\n📝 Duplicate: ⚠️ ${duplicates}\n\n`
 
   content += `👤 USERNAMES:\n`
-  content += dailyUsers ? [...targetData.usersDay].join('\n') : 'None'
+  content += allUsers.size ? [...allUsers].join('\n') : 'None'
 
   content += `\n\n📱 Phone Numbers Today: ${dailyPhones}`
   content += `\n@ Username Count Today: ${dailyUsers}`
