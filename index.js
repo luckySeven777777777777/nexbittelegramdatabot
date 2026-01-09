@@ -13,7 +13,7 @@ store.set('HISTORY', {
   users: new Set()
 })
 
-// ===== Order Logs (NEW) =====
+// ===== Order Logs =====
 store.set('LOGS', [])
 
 function normalizePhone(p) {
@@ -53,8 +53,8 @@ function getUser(chatId, userId) {
   return store.get(key)
 }
 
-const today = () => new Date().toISOString().slice(0,10)
-const month = () => new Date().toISOString().slice(0,7)
+const today = () => new Date().toISOString().slice(0, 10)
+const month = () => new Date().toISOString().slice(0, 7)
 
 const extractPhones = t => t.match(/\b\d{7,15}\b/g) || []
 const extractMentions = t => t.match(/@[a-zA-Z0-9_]{3,32}/g) || []
@@ -70,6 +70,9 @@ async function isAdmin(ctx) {
 
 // ===== Message Listener =====
 bot.on('text', async ctx => {
+  // ⚠️ 命令不进入统计
+  if (ctx.message.text.startsWith('/')) return
+
   const text = ctx.message.text
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
@@ -121,7 +124,7 @@ bot.on('text', async ctx => {
     timeZone: 'Asia/Yangon'
   })
 
-  // ===== SAVE LOG (NEW) =====
+  // ===== Save log =====
   logs.push({
     date: today(),
     time: now,
@@ -129,12 +132,10 @@ bot.on('text', async ctx => {
     userId: ctx.from.id,
     username: ctx.from.username ? '@' + ctx.from.username : '',
     name: `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim(),
-
     phoneToday: data.phonesDay.size,
     usernameToday: data.usersDay.size,
     dailyIncrease: data.phonesDay.size + data.usersDay.size,
     monthlyTotal: data.phonesMonth.size + data.usersMonth.size,
-
     duplicateCount: dupCount,
     duplicateList: dupList.join(', ')
   })
@@ -151,9 +152,11 @@ bot.on('text', async ctx => {
   await ctx.reply(msg)
 })
 
-// ===== Export Orders (Admin Only) =====
+// ===== Export Orders =====
 bot.command('export', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
+
+  await ctx.reply('📤 Exporting, please wait...')
 
   const arg = ctx.message.text.split(' ')[1] || 'all'
   const logs = store.get('LOGS')
@@ -172,7 +175,11 @@ bot.command('export', async ctx => {
 
   const file = `orders_${arg}.xlsx`
   XLSX.writeFile(wb, file)
-  await ctx.replyWithDocument({ source: file })
+
+  await ctx.replyWithDocument({
+    source: fs.createReadStream(file),
+    filename: file
+  })
 })
 
 // ===== Start =====
