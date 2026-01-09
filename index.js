@@ -25,10 +25,8 @@ function preloadHistory(file = 'history.txt') {
   }
 
   const text = fs.readFileSync(file, 'utf8')
-
   const rawPhones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
   const rawUsers = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
-
   const history = store.get('HISTORY')
 
   rawPhones.forEach(p => {
@@ -37,10 +35,7 @@ function preloadHistory(file = 'history.txt') {
   })
 
   rawUsers.forEach(u => history.users.add(u.toLowerCase()))
-
-  console.log(
-    `📚 History loaded: ${history.phones.size} phones, ${history.users.size} usernames`
-  )
+  console.log(`📚 History loaded: ${history.phones.size} phones, ${history.users.size} usernames`)
 }
 
 function getUser(chatId, userId) {
@@ -58,8 +53,8 @@ function getUser(chatId, userId) {
   return store.get(key)
 }
 
-const today = () => new Date().toISOString().slice(0,10)
-const month = () => new Date().toISOString().slice(0,7)
+const today = () => new Date().toISOString().slice(0, 10)
+const month = () => new Date().toISOString().slice(0, 7)
 
 const extractPhones = t => t.match(/\b\d{7,15}\b/g) || []
 const extractMentions = t => t.match(/@[a-zA-Z0-9_]{3,32}/g) || []
@@ -101,48 +96,36 @@ bot.on('text', async ctx => {
 
   phones.forEach(p => {
     const np = normalizePhone(p)
-    if (
-      history.phones.has(np) ||
-      data.phonesMonth.has(np)
-    ) {
+    if (history.phones.has(np) || data.phonesMonth.has(np)) {
       dupCount++
       dupList.push(np)
     } else {
       data.phonesDay.add(np)
       data.phonesMonth.add(np)
-      history.phones.add(np) // 只加，不删除
+      history.phones.add(np)
     }
   })
 
   users.forEach(u => {
     const nu = u.toLowerCase()
-    if (
-      history.users.has(nu) ||
-      data.usersMonth.has(nu)
-    ) {
+    if (history.users.has(nu) || data.usersMonth.has(nu)) {
       dupCount++
       dupList.push(nu)
     } else {
       data.usersDay.add(nu)
       data.usersMonth.add(nu)
-      history.users.add(nu) // 只加，不删除
+      history.users.add(nu)
     }
   })
 
-  // ===== Auto reply for ANY message =====
-  const now = new Date().toLocaleString('en-US', {
-    timeZone: 'Asia/Yangon'
-  })
-
-  const msg =
-`👤 User: ${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''} ${ctx.from.id}
+  const now = new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
+  const msg = `👤 User: ${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''} ${ctx.from.id}
 📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
 📱 Phone Numbers Today: ${data.phonesDay.size}
 @ Username Count Today: ${data.usersDay.size}
 📈 Daily Increase: ${data.phonesDay.size + data.usersDay.size}
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
 📅 Time: ${now}`
-
 
   await ctx.reply(msg)
 })
@@ -164,40 +147,35 @@ bot.command('export', async ctx => {
   const ws = XLSX.utils.json_to_sheet(rows)
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'stats')
-  const file = 'export.xlsx'
-  XLSX.writeFile(wb, file)
-  await ctx.replyWithDocument({ source: file })
+
+  // Buffer 方式发送，不写本地文件
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+  await ctx.replyWithDocument({ source: buf, filename: 'export.xlsx' })
 })
+
 // ===== /history Export (Admin Only) =====
 bot.command('history', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
-  const args = ctx.message.text.split(' ').slice(1) // 去掉 /history
+  const args = ctx.message.text.split(' ').slice(1)
   let targetUser = null
   let targetDate = null
 
   args.forEach(arg => {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
-      targetDate = arg
-    } else if (/^\d{7,15}$/.test(arg)) {
-      targetUser = arg
-    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) targetDate = arg
+    else if (/^\d{7,15}$/.test(arg)) targetUser = arg
   })
 
   const rows = []
 
   for (const [key, data] of store.entries()) {
     if (key === 'HISTORY') continue
-
     const [chatId, userId] = key.split(':')
     const includeUser = !targetUser || userId === targetUser
     const includeDate = !targetDate || data.day === targetDate
 
     if (includeUser && includeDate) {
-      const now = new Date().toLocaleString('en-US', {
-        timeZone: 'Asia/Yangon'
-      })
-
+      const now = new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
       rows.push({
         '📚 HISTORY RECORD': '',
         '👤 User': `${chatId}:${userId}`,
@@ -218,9 +196,10 @@ bot.command('history', async ctx => {
   const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'history')
-  const file = 'history_export.xlsx'
-  XLSX.writeFile(wb, file)
-  await ctx.replyWithDocument({ source: file })
+
+  // Buffer 方式发送
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+  await ctx.replyWithDocument({ source: buf, filename: 'history_export.xlsx' })
 })
 
 // ===== Start =====
