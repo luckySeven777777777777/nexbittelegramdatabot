@@ -146,45 +146,56 @@ bot.on('text', async ctx => {
   await ctx.reply(msg)
 })
 
-// ===== Export (Admin Only, supports optional userId & date) =====
+// ===== Export (Admin Only, 支持 userId & date) =====
 bot.command('export', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
-  const args = ctx.message.text.split(' ').slice(1) // 获取命令参数
+  const args = ctx.message.text.split(' ').slice(1)
   const userId = args[0] || null
   const date = args[1] || null
 
   const rows = []
+  const now = new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
+
   for (const [k, v] of store.entries()) {
     if (k === 'HISTORY') continue
-
     const [chatId, uId] = k.split(':')
+
     if (userId && uId !== userId) continue
 
+    const phonesToday = v.phonesDay.size
+    const usersToday = v.usersDay.size
+    const dailyIncrease = phonesToday + usersToday
+    const monthlyTotal = v.phonesMonth.size + v.usersMonth.size
+
     if (date) {
-      // 仅导出指定日期
-      if (v.day === date) {
+      if (v.day === date || v.month === date.slice(0,7)) {
         rows.push({
-          key: k,
-          phones_day: v.phonesDay.size,
-          users_day: v.usersDay.size,
-          daily_increase: v.phonesDay.size + v.usersDay.size
-        })
-      }
-      if (v.month === date.slice(0,7)) {
-        rows.push({
-          key: k,
-          phones_month: v.phonesMonth.size,
-          users_month: v.usersMonth.size,
-          monthly_total: v.phonesMonth.size + v.usersMonth.size
+          '📚 HISTORY RECORD': '',
+          '👤 User': uId,
+          '📱 PHONES': Array.from(v.phonesMonth).join(', '),
+          '📝 Duplicate': '',
+          '👤 USERNAMES': Array.from(v.usersMonth).join(', '),
+          '📱 Phone Numbers Today': phonesToday,
+          '@ Username Count Today': usersToday,
+          '📈 Daily Increase': dailyIncrease,
+          '📊 Monthly Total': monthlyTotal,
+          '📅 Time': now
         })
       }
     } else {
-      // 导出全部数据
+      // 全部导出
       rows.push({
-        key: k,
-        phones_month: v.phonesMonth.size,
-        users_month: v.usersMonth.size
+        '📚 HISTORY RECORD': '',
+        '👤 User': uId,
+        '📱 PHONES': Array.from(v.phonesMonth).join(', '),
+        '📝 Duplicate': '',
+        '👤 USERNAMES': Array.from(v.usersMonth).join(', '),
+        '📱 Phone Numbers Today': phonesToday,
+        '@ Username Count Today': usersToday,
+        '📈 Daily Increase': dailyIncrease,
+        '📊 Monthly Total': monthlyTotal,
+        '📅 Time': now
       })
     }
   }
@@ -193,12 +204,20 @@ bot.command('export', async ctx => {
 
   const ws = XLSX.utils.json_to_sheet(rows)
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'stats')
-  const file = userId && date ? `export_${userId}_${date}.xlsx` : 'export.xlsx'
-  XLSX.writeFile(wb, file)
+  XLSX.utils.book_append_sheet(wb, ws, 'history')
 
+  let file
+  if (userId && date) {
+    file = `export_${userId}_${date}.xlsx`
+  } else if (userId) {
+    file = `export_${userId}_month.xlsx`
+  } else {
+    file = 'export_all.xlsx'
+  }
+
+  XLSX.writeFile(wb, file)
   await ctx.replyWithDocument({ source: file })
-  if (userId && date) await ctx.reply(`✅ Exported data for user ${userId} on ${date}`)
+  if (userId) await ctx.reply(`✅ Exported data for user ${userId}${date ? ' on ' + date : ''}`)
 })
 
 // ===== Start =====
