@@ -143,81 +143,30 @@ bot.on('text', async ctx => {
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
 📅 Time: ${now}`
 
+
   await ctx.reply(msg)
 })
 
-// ===== Export (Admin Only, 支持 userId & date) =====
+// ===== Export (Admin Only) =====
 bot.command('export', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
-  const args = ctx.message.text.split(' ').slice(1)
-  const userId = args[0] || null
-  const date = args[1] || null
-
   const rows = []
-  const now = new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
-
   for (const [k, v] of store.entries()) {
     if (k === 'HISTORY') continue
-    const [chatId, uId] = k.split(':')
-
-    if (userId && uId !== userId) continue
-
-    const phonesToday = v.phonesDay.size
-    const usersToday = v.usersDay.size
-    const dailyIncrease = phonesToday + usersToday
-    const monthlyTotal = v.phonesMonth.size + v.usersMonth.size
-
-    if (date) {
-      if (v.day === date || v.month === date.slice(0,7)) {
-        rows.push({
-          '📚 HISTORY RECORD': '',
-          '👤 User': uId,
-          '📱 PHONES': Array.from(v.phonesMonth).join(', '),
-          '📝 Duplicate': '',
-          '👤 USERNAMES': Array.from(v.usersMonth).join(', '),
-          '📱 Phone Numbers Today': phonesToday,
-          '@ Username Count Today': usersToday,
-          '📈 Daily Increase': dailyIncrease,
-          '📊 Monthly Total': monthlyTotal,
-          '📅 Time': now
-        })
-      }
-    } else {
-      // 全部导出
-      rows.push({
-        '📚 HISTORY RECORD': '',
-        '👤 User': uId,
-        '📱 PHONES': Array.from(v.phonesMonth).join(', '),
-        '📝 Duplicate': '',
-        '👤 USERNAMES': Array.from(v.usersMonth).join(', '),
-        '📱 Phone Numbers Today': phonesToday,
-        '@ Username Count Today': usersToday,
-        '📈 Daily Increase': dailyIncrease,
-        '📊 Monthly Total': monthlyTotal,
-        '📅 Time': now
-      })
-    }
+    rows.push({
+      key: k,
+      phones_month: v.phonesMonth.size,
+      users_month: v.usersMonth.size
+    })
   }
-
-  if (rows.length === 0) return ctx.reply('❌ No data found for this user/date')
 
   const ws = XLSX.utils.json_to_sheet(rows)
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'history')
-
-  let file
-  if (userId && date) {
-    file = `export_${userId}_${date}.xlsx`
-  } else if (userId) {
-    file = `export_${userId}_month.xlsx`
-  } else {
-    file = 'export_all.xlsx'
-  }
-
+  XLSX.utils.book_append_sheet(wb, ws, 'stats')
+  const file = 'export.xlsx'
   XLSX.writeFile(wb, file)
   await ctx.replyWithDocument({ source: file })
-  if (userId) await ctx.reply(`✅ Exported data for user ${userId}${date ? ' on ' + date : ''}`)
 })
 
 // ===== Start =====
