@@ -4,45 +4,45 @@ import fs from 'fs'
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 
-// ===== In-memory store (Railway safe, simple) =====
+// ===== In-memory store (Railway safe) =====
 const store = new Map()
 
-// ===== History store (global, preload) =====
+// ===== History global =====
 store.set('HISTORY', {
   phones: new Set(),
   users: new Set()
 })
 
-function normalizePhone(p) {
-  return p.replace(/\D/g, '')
-}
+const HISTORY_FILE = 'history.txt'
 
-// ===== Load history.txt once at startup =====
-function preloadHistory(file = 'history.txt') {
+// ===== Utils =====
+const today = () => new Date().toISOString().slice(0, 10)
+const month = () => new Date().toISOString().slice(0, 7)
+const normalizePhone = p => p.replace(/\D/g, '')
+
+const extractPhones = t => t.match(/\b\d{7,15}\b/g) || []
+const extractMentions = t => t.match(/@[a-zA-Z0-9_]{3,32}/g) || []
+
+// ===== Preload history.txt =====
+function preloadHistory(file = HISTORY_FILE) {
   if (!fs.existsSync(file)) {
     console.log('⚠️ history.txt not found, skip preload')
     return
   }
 
   const text = fs.readFileSync(file, 'utf8')
-
-  const rawPhones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
-  const rawUsers = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
-
   const history = store.get('HISTORY')
 
-  rawPhones.forEach(p => {
-    const n = normalizePhone(p)
-    if (n.length >= 7) history.phones.add(n)
-  })
+  const phones = text.match(/\b\d{7,15}\b/g) || []
+  const users = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
 
-  rawUsers.forEach(u => history.users.add(u.toLowerCase()))
+  phones.forEach(p => history.phones.add(normalizePhone(p)))
+  users.forEach(u => history.users.add(u.toLowerCase()))
 
-  console.log(
-    `📚 History loaded: ${history.phones.size} phones, ${history.users.size} usernames`
-  )
+  console.log(`📚 History loaded: ${history.phones.size} phones, ${history.users.size} users`)
 }
 
+// ===== Per-user store =====
 function getUser(chatId, userId) {
   const key = `${chatId}:${userId}`
   if (!store.has(key)) {
@@ -58,12 +58,7 @@ function getUser(chatId, userId) {
   return store.get(key)
 }
 
-const today = () => new Date().toISOString().slice(0,10)
-const month = () => new Date().toISOString().slice(0,7)
-
-const extractPhones = t => t.match(/\b\d{7,15}\b/g) || []
-const extractMentions = t => t.match(/@[a-zA-Z0-9_]{3,32}/g) || []
-
+// ===== Admin check =====
 async function isAdmin(ctx) {
   try {
     const m = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id)
@@ -73,13 +68,18 @@ async function isAdmin(ctx) {
   }
 }
 
-// ===== Message Listener =====
+// ===== Append to history.txt =====
+function appendHistory({ date, chatId, userId, name, value }) {
+  const line = `[${date}] | chat:${chatId} | user:${userId} | ${name} | ${value}\n`
+  fs.appendFileSync(HISTORY_FILE, line)
+}
+
+// ===== Message listener =====
 bot.on('text', async ctx => {
   const text = ctx.message.text
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
 
-  // ===== Reset logic =====
   if (data.day !== today()) {
     data.day = today()
     data.phonesDay.clear()
@@ -92,62 +92,95 @@ bot.on('text', async ctx => {
     data.usersMonth.clear()
   }
 
-  // ===== Extract =====
   const phones = extractPhones(text)
   const users = extractMentions(text)
 
   let dupCount = 0
   let dupList = []
 
+  const name =
+    `${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''}`
+
   phones.forEach(p => {
     const np = normalizePhone(p)
-    if (
-      history.phones.has(np) ||
-      data.phonesMonth.has(np)
-    ) {
+    if (history.phones.has(np) || data.phonesMonth.has(np)) {
       dupCount++
       dupList.push(np)
     } else {
       data.phonesDay.add(np)
       data.phonesMonth.add(np)
-      history.phones.add(np) // 只加，不删除
+      history.phones.add(np)
+      appendHistory({
+        date: today(),
+        chatId: ctx.chat.id,
+        userId: ctx.from.id,
+        name,
+        value: np
+      })
     }
   })
 
   users.forEach(u => {
     const nu = u.toLowerCase()
-    if (
-      history.users.has(nu) ||
-      data.usersMonth.has(nu)
-    ) {
+    if (history.users.has(nu) || data.usersMonth.has(nu)) {
       dupCount++
       dupList.push(nu)
     } else {
       data.usersDay.add(nu)
       data.usersMonth.add(nu)
-      history.users.add(nu) // 只加，不删除
+      history.users.add(nu)
+      appendHistory({
+        date: today(),
+        chatId: ctx.chat.id,
+        userId: ctx.from.id,
+        name,
+        value: nu
+      })
     }
   })
 
-  // ===== Auto reply for ANY message =====
-  const now = new Date().toLocaleString('en-US', {
-    timeZone: 'Asia/Yangon'
-  })
+  const now = new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
 
-  const msg =
-`👤 User: ${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''} ${ctx.from.id}
-📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
-📱 Phone Numbers Today: ${data.phonesDay.size}
-@ Username Count Today: ${data.usersDay.size}
+  await ctx.reply(
+`👤 User: ${name} ${ctx.from.id}
+📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')}` : 'None'}
 📈 Daily Increase: ${data.phonesDay.size + data.usersDay.size}
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
 📅 Time: ${now}`
-
-
-  await ctx.reply(msg)
+  )
 })
 
-// ===== Export (Admin Only) =====
+// ===== /history download =====
+bot.command('history', async ctx => {
+  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
+
+  if (!fs.existsSync(HISTORY_FILE)) {
+    return ctx.reply('⚠️ No history file')
+  }
+
+  const args = ctx.message.text.split(' ').slice(1)
+  const date = args.find(a => /^\d{4}-\d{2}-\d{2}$/.test(a))
+  const user = args.find(a => a.startsWith('@'))
+
+  const lines = fs.readFileSync(HISTORY_FILE, 'utf8')
+    .split('\n')
+    .filter(l => {
+      if (date && !l.includes(`[${date}]`)) return false
+      if (user && !l.toLowerCase().includes(user.toLowerCase())) return false
+      return true
+    })
+
+  if (!lines.length) {
+    return ctx.reply('⚠️ No matched history')
+  }
+
+  const file = `history_${Date.now()}.txt`
+  fs.writeFileSync(file, lines.join('\n'))
+
+  await ctx.replyWithDocument({ source: file })
+})
+
+// ===== Export XLSX =====
 bot.command('export', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
@@ -166,6 +199,7 @@ bot.command('export', async ctx => {
   XLSX.utils.book_append_sheet(wb, ws, 'stats')
   const file = 'export.xlsx'
   XLSX.writeFile(wb, file)
+
   await ctx.replyWithDocument({ source: file })
 })
 
