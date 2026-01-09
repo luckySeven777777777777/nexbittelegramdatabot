@@ -108,6 +108,64 @@ bot.command('history', async ctx => {
   fs.unlinkSync(file)
 })
 
+// ---- DOWNLOAD SPECIFIC USER HISTORY TXT ----
+bot.command('history_user', async ctx => {
+  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
+
+  const args = ctx.message.text.split(' ')
+  const targetUserId = args[1]
+
+  if (!targetUserId) {
+    return ctx.reply('❗ 用法: /history_user <userId>')
+  }
+
+  let targetKey = null
+  let targetData = null
+
+  for (const [k, v] of store.entries()) {
+    if (k === 'HISTORY') continue
+    if (k.endsWith(`:${targetUserId}`)) {
+      targetKey = k
+      targetData = v
+      break
+    }
+  }
+
+  if (!targetData) {
+    return ctx.reply('❌ 未找到该用户记录')
+  }
+
+  const now = new Date().toLocaleString('en-US', {
+    timeZone: 'Asia/Yangon'
+  })
+
+  const dailyPhones = targetData.phonesDay.size
+  const dailyUsers = targetData.usersDay.size
+  const dailyIncrease = dailyPhones + dailyUsers
+  const monthlyTotal = targetData.phonesMonth.size + targetData.usersMonth.size
+
+  let content = `📚 HISTORY RECORD\n\n`
+  content += `👤 User: ${targetUserId}\n\n`
+
+  content += `📱 PHONES:\n`
+  content += dailyPhones ? [...targetData.phonesDay].join('\n') : 'None'
+
+  content += `\n\n📝 Duplicate: ⚠️ ${Math.max(0, monthlyTotal - dailyIncrease)}\n\n`
+
+  content += `👤 USERNAMES:\n`
+  content += dailyUsers ? [...targetData.usersDay].join('\n') : 'None'
+
+  content += `\n\n📱 Phone Numbers Today: ${dailyPhones}`
+  content += `\n@ Username Count Today: ${dailyUsers}`
+  content += `\n📈 Daily Increase: ${dailyIncrease}`
+  content += `\n📊 Monthly Total: ${monthlyTotal}`
+  content += `\n📅 Time: ${now}`
+
+  const file = `history_user_${targetUserId}_${Date.now()}.txt`
+  fs.writeFileSync(file, content, 'utf8')
+  await ctx.replyWithDocument({ source: file })
+  fs.unlinkSync(file)
+})
 // ================== TEXT LISTENER (最后) ==================
 bot.on('text', async ctx => {
   const text = ctx.message.text
