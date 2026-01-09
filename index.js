@@ -90,55 +90,17 @@ bot.command('export', async ctx => {
   fs.unlinkSync(file)
 })
 
-// ---- DOWNLOAD HISTORY TXT (改造版) ----
+// ---- DOWNLOAD HISTORY TXT ----
 bot.command('history', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
-  // 解析参数：/history [userId] [YYYY-MM-DD]
-  const args = ctx.message.text.split(' ').slice(1)
-  const targetUser = args[0] || null
-  const targetDate = args[1] || null
-
   const history = store.get('HISTORY')
-  let usersToShow = []
-  let phonesToShow = []
-
-  // 如果指定了用户和日期
-  if (targetUser && targetDate) {
-    // 从 store 找到对应 key
-    const key = `${ctx.chat.id}:${targetUser}`
-    const data = store.get(key)
-    if (!data) return ctx.reply('❌ No data for this user')
-
-    const dayPhones = data.day === targetDate ? [...data.phonesDay] : []
-    const dayUsers = data.day === targetDate ? [...data.usersDay] : []
-
-    usersToShow = dayUsers
-    phonesToShow = dayPhones
-  } else {
-    // 默认展示全部 HISTORY
-    usersToShow = [...history.users]
-    phonesToShow = [...history.phones]
-  }
-
-  const now = new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
-
-  // 统计
-  const dailyIncrease = phonesToShow.length + usersToShow.length
-  const monthlyTotal = Array.from(store.values())
-    .filter(v => v.phonesMonth && v.usersMonth)
-    .reduce((sum, v) => sum + v.phonesMonth.size + v.usersMonth.size, 0)
 
   let content = '📚 HISTORY RECORD\n\n'
-  content += `👤 User: ${targetUser || 'ALL'}\n`
-  content += `📱 PHONES:\n${phonesToShow.length ? phonesToShow.join('\n') : 'None'}\n`
-  content += `📝 Duplicate: None\n`  // 可选，如果想显示当日重复，可进一步统计
-  content += `👤 USERNAMES:\n${usersToShow.length ? usersToShow.join('\n') : 'None'}\n`
-  content += `📱 Phone Numbers Today: ${phonesToShow.length}\n`
-  content += `@ Username Count Today: ${usersToShow.length}\n`
-  content += `📈 Daily Increase: ${dailyIncrease}\n`
-  content += `📊 Monthly Total: ${monthlyTotal}\n`
-  content += `📅 Time: ${now}\n`
+  content += '📱 PHONES:\n'
+  content += history.phones.size ? [...history.phones].join('\n') : 'None'
+  content += '\n\n👤 USERNAMES:\n'
+  content += history.users.size ? [...history.users].join('\n') : 'None'
 
   const file = `history_download_${Date.now()}.txt`
   fs.writeFileSync(file, content, 'utf8')
