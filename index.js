@@ -6,11 +6,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN)
 
 // ================== STORE ==================
 const store = new Map()
-
-store.set('HISTORY', {
-  phones: new Set(),
-  users: new Set()
-})
+store.set('HISTORY', { phones: new Set(), users: new Set() })
 
 // ================== UTILS ==================
 const today = () => new Date().toISOString().slice(0, 10)
@@ -51,20 +47,16 @@ function preloadHistory(file = 'history.txt') {
   const text = fs.readFileSync(file, 'utf8')
   const history = store.get('HISTORY')
 
-  const phones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
+  const phones = text.match(/\b\d{7,15}\b/g) || []
   const users = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
 
-  phones.forEach(p => {
-    const n = normalizePhone(p)
-    if (n.length >= 7) history.phones.add(n)
-  })
-
+  phones.forEach(p => history.phones.add(normalizePhone(p)))
   users.forEach(u => history.users.add(u.toLowerCase()))
 
   console.log(`📚 History loaded: ${history.phones.size} phones, ${history.users.size} users`)
 }
 
-// ================== COMMANDS (一定要在前面) ==================
+// ================== COMMANDS ==================
 
 // ---- EXPORT STATS ----
 bot.command('export', async ctx => {
@@ -97,10 +89,8 @@ bot.command('history', async ctx => {
   const history = store.get('HISTORY')
 
   let content = '📚 HISTORY RECORD\n\n'
-  content += '📱 PHONES:\n'
-  content += history.phones.size ? [...history.phones].join('\n') : 'None'
-  content += '\n\n👤 USERNAMES:\n'
-  content += history.users.size ? [...history.users].join('\n') : 'None'
+  content += '📱 PHONES:\n' + (history.phones.size ? [...history.phones].join('\n') : 'None')
+  content += '\n\n👤 USERNAMES:\n' + (history.users.size ? [...history.users].join('\n') : 'None')
 
   const file = `history_download_${Date.now()}.txt`
   fs.writeFileSync(file, content, 'utf8')
@@ -108,10 +98,65 @@ bot.command('history', async ctx => {
   fs.unlinkSync(file)
 })
 
-// ================== TEXT LISTENER (最后) ==================
+// ---- DOWNLOAD SPECIFIC USER HISTORY TXT ----
+bot.command('history_user', async ctx => {
+  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
+
+  const args = ctx.message.text.split(' ')
+  const targetUserId = args[1]
+  if (!targetUserId) return ctx.reply('❗ 用法: /history_user <userId>')
+
+  const history = store.get('HISTORY')
+
+  // ====== 读取 TXT 历史 ======
+  let filePhones = new Set()
+  let fileUsers = new Set()
+  if (fs.existsSync('history.txt')) {
+    const text = fs.readFileSync('history.txt', 'utf8')
+    ;(text.match(/\b\d{7,15}\b/g) || []).forEach(p => filePhones.add(normalizePhone(p)))
+    ;(text.match(/@[a-zA-Z0-9_]{3,32}/g) || []).forEach(u => fileUsers.add(u.toLowerCase()))
+  }
+
+  const targetKey = `${ctx.chat.id}:${targetUserId}`
+  const targetData = store.get(targetKey) || {
+    phonesDay: new Set(),
+    usersDay: new Set(),
+    phonesMonth: new Set(),
+    usersMonth: new Set()
+  }
+
+  const dailyPhones = targetData.phonesDay.size
+  const dailyUsers = targetData.usersDay.size
+  const dailyIncrease = dailyPhones + dailyUsers
+
+  const allPhones = new Set([...filePhones, ...targetData.phonesMonth])
+  const allUsers = new Set([...fileUsers, ...targetData.usersMonth])
+  const monthlyTotal = allPhones.size + allUsers.size
+  const duplicates = Math.max(0, monthlyTotal - dailyIncrease)
+
+  const now = new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
+
+  let content = `📚 HISTORY RECORD\n\n`
+  content += `👤 User: ${targetUserId}\n\n`
+  content += `📱 PHONES:\n` + (allPhones.size ? [...allPhones].join('\n') : 'None')
+  content += `\n\n📝 Duplicate: ⚠️ ${duplicates}\n\n`
+  content += `👤 USERNAMES:\n` + (allUsers.size ? [...allUsers].join('\n') : 'None')
+  content += `\n\n📱 Phone Numbers Today: ${dailyPhones}`
+  content += `\n@ Username Count Today: ${dailyUsers}`
+  content += `\n📈 Daily Increase: ${dailyIncrease}`
+  content += `\n📊 Monthly Total: ${monthlyTotal}`
+  content += `\n📅 Time: ${now}`
+
+  const file = `history_user_${targetUserId}_${Date.now()}.txt`
+  fs.writeFileSync(file, content, 'utf8')
+  await ctx.replyWithDocument({ source: file })
+  fs.unlinkSync(file)
+})
+
+// ================== TEXT LISTENER ==================
 bot.on('text', async ctx => {
   const text = ctx.message.text
-  if (text.startsWith('/')) return   // ⭐ 不吃命令
+  if (text.startsWith('/')) return // 不吃命令
 
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
@@ -121,7 +166,6 @@ bot.on('text', async ctx => {
     data.phonesDay.clear()
     data.usersDay.clear()
   }
-
   if (data.month !== month()) {
     data.month = month()
     data.phonesMonth.clear()
@@ -175,4 +219,4 @@ bot.on('text', async ctx => {
 // ================== START ==================
 preloadHistory()
 bot.launch()
-console.log('✅ Bot running — /history works')
+console.log('✅ Bot running — /history_user now detects duplicates')
