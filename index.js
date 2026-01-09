@@ -162,16 +162,23 @@ bot.on('text', async ctx => {
   await ctx.reply(msg)
 })
 
-// ===== Export Orders (FINAL) =====
+// ===== Export Orders (FIXED & STABLE) =====
 bot.command('export', async ctx => {
-  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
+  if (!(await isAdmin(ctx))) {
+    return ctx.reply('❌ Admin only')
+  }
 
   const args = ctx.message.text.trim().split(/\s+/)
   const arg = args[1] || 'all'
 
-  const logs = store.get('LOGS')
+  const logs = store.get('LOGS') || []
   let data = logs
 
+  // 支持：
+  // /export
+  // /export all
+  // /export 2026-01-10
+  // /export 2026-01
   if (arg !== 'all') {
     data = logs.filter(l =>
       l.date === arg || l.date.startsWith(arg)
@@ -184,21 +191,21 @@ bot.command('export', async ctx => {
 
   await ctx.reply('📤 Exporting Excel, please wait...')
 
+  // ===== Build Excel =====
   const ws = XLSX.utils.json_to_sheet(data)
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Orders')
 
-  const fileName = `orders_${arg}.xlsx`
-  XLSX.writeFile(wb, fileName)
-
-  await ctx.replyWithDocument({
-    source: fs.createReadStream(fileName),
-    filename: fileName
+  // ✅ 关键修复：用 Buffer，不落盘
+  const buffer = XLSX.write(wb, {
+    bookType: 'xlsx',
+    type: 'buffer'
   })
 
-  setTimeout(() => {
-    if (fs.existsSync(fileName)) fs.unlinkSync(fileName)
-  }, 5000)
+  await ctx.replyWithDocument({
+    source: buffer,
+    filename: `orders_${arg}.xlsx`
+  })
 })
 
 // ===== Start =====
