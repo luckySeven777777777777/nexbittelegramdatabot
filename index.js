@@ -1,4 +1,4 @@
-import { Telegraf } from 'telegraf'
+import { Telegraf, Markup } from 'telegraf'
 import XLSX from 'xlsx'
 import fs from 'fs'
 
@@ -13,13 +13,6 @@ store.set('HISTORY', {
   users: new Set()
 })
 
-// ===== Logs store (NEW) =====
-store.set('LOGS', [])
-
-// ===== Utils =====
-const today = () => new Date().toISOString().slice(0, 10)
-const month = () => new Date().toISOString().slice(0, 7)
-
 function normalizePhone(p) {
   return p.replace(/\D/g, '')
 }
@@ -32,6 +25,7 @@ function preloadHistory(file = 'history.txt') {
   }
 
   const text = fs.readFileSync(file, 'utf8')
+
   const rawPhones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
   const rawUsers = text.match(/@[a-zA-Z0-9_]{3,32}/g) || []
 
@@ -49,12 +43,15 @@ function preloadHistory(file = 'history.txt') {
   )
 }
 
+const today = () => new Date().toISOString().slice(0, 10)
+const monthNow = () => new Date().toISOString().slice(0, 7)
+
 function getUser(chatId, userId) {
   const key = `${chatId}:${userId}`
   if (!store.has(key)) {
     store.set(key, {
       day: today(),
-      month: month(),
+      month: monthNow(),
       phonesDay: new Set(),
       usersDay: new Set(),
       phonesMonth: new Set(),
@@ -76,26 +73,22 @@ async function isAdmin(ctx) {
   }
 }
 
-// ===== Message Listener (IGNORE COMMANDS) =====
+// ===== Message Listener =====
 bot.on('text', async ctx => {
   const text = ctx.message.text
-
-  // ⚠️ 命令不进入统计
-  if (text.startsWith('/')) return
-
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
-  const logs = store.get('LOGS')
 
-  // ===== Reset day/month =====
+  // reset day
   if (data.day !== today()) {
     data.day = today()
     data.phonesDay.clear()
     data.usersDay.clear()
   }
 
-  if (data.month !== month()) {
-    data.month = month()
+  // reset month
+  if (data.month !== monthNow()) {
+    data.month = monthNow()
     data.phonesMonth.clear()
     data.usersMonth.clear()
   }
@@ -134,24 +127,8 @@ bot.on('text', async ctx => {
     timeZone: 'Asia/Yangon'
   })
 
-  // ===== Save LOG =====
-  logs.push({
-    date: today(),
-    time: now,
-    chatId: ctx.chat.id,
-    userId: ctx.from.id,
-    username: ctx.from.username ? '@' + ctx.from.username : '',
-    name: `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim(),
-    duplicateCount: dupCount,
-    duplicateList: dupList.join(', '),
-    phoneToday: data.phonesDay.size,
-    usernameToday: data.usersDay.size,
-    dailyIncrease: data.phonesDay.size + data.usersDay.size,
-    monthlyTotal: data.phonesMonth.size + data.usersMonth.size
-  })
-
   const msg =
-`👤 User: ${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''} ${ctx.from.id}
+`👤 User: ${ctx.from.first_name || ''} ${ctx.from.last_name || ''} (${ctx.from.id})
 📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
 📱 Phone Numbers Today: ${data.phonesDay.size}
 @ Username Count Today: ${data.usersDay.size}
@@ -162,48 +139,52 @@ bot.on('text', async ctx => {
   await ctx.reply(msg)
 })
 
-// ===== Export Orders (PUBLIC & FIXED) =====
-bot.command(['export', 'export@nexbittelegramdatabot'], async ctx => {
-  // ⛔ 不再限制管理员
+// ===== /month panel (Admin) =====
+bot.command('month', async ctx => {
+  if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
-  const args = ctx.message.text.trim().split(/\s+/)
-  const arg = args[1] || 'all'
+  const m = monthNow()
 
-  const logs = store.get('LOGS') || []
-  let data = logs
+  await ctx.reply(
+`📊 Monthly Order Panel
+📅 Month: ${m}
 
-  // 支持：
-  // /export
-  // /export all
-  // /export 2026-01-10
-  // /export 2026-01
-  if (arg !== 'all') {
-    data = logs.filter(l =>
-      l.date === arg || l.date.startsWith(arg)
-    )
+请选择操作：`,
+    Markup.inlineKeyboard([
+      [Markup.button.callback('📤 Export', `EXPORT:${m}`)]
+    ])
+})
+
+// ===== Export callback =====
+bot.action(/EXPORT:(.+)/, async ctx => {
+  if (!(await isAdmin(ctx))) {
+    return ctx.answerCbQuery('Admin only')
   }
 
-  if (!data.length) {
-    return ctx.reply('⚠️ No data to export')
+  const m = ctx.match[1]
+  const rows = []
+
+  for (const [k, v] of store.entries()) {
+    if (k === 'HISTORY') continue
+
+    rows.push({
+      user: k,
+      phone_month: v.phonesMonth.size,
+      username_month: v.usersMonth.size,
+      total: v.phonesMonth.size + v.usersMonth.size,
+      month: m
+    })
   }
 
-  await ctx.reply('📤 Exporting Excel, please wait...')
-
-  // ===== Build Excel =====
-  const ws = XLSX.utils.json_to_sheet(data)
+  const ws = XLSX.utils.json_to_sheet(rows)
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Orders')
+  XLSX.utils.book_append_sheet(wb, ws, 'Monthly Stats')
 
-  // ✅ Buffer 方式（云端 100% 稳）
-  const buffer = XLSX.write(wb, {
-    bookType: 'xlsx',
-    type: 'buffer'
-  })
+  const file = `export_${m}.xlsx`
+  XLSX.writeFile(wb, file)
 
-  await ctx.replyWithDocument({
-    source: buffer,
-    filename: `orders_${arg}.xlsx`
-  })
+  await ctx.replyWithDocument({ source: file })
+  await ctx.answerCbQuery('✅ Exported')
 })
 
 // ===== Start =====
