@@ -13,8 +13,12 @@ store.set('HISTORY', {
   users: new Set()
 })
 
-// ===== Order Logs =====
+// ===== Logs store (NEW) =====
 store.set('LOGS', [])
+
+// ===== Utils =====
+const today = () => new Date().toISOString().slice(0, 10)
+const month = () => new Date().toISOString().slice(0, 7)
 
 function normalizePhone(p) {
   return p.replace(/\D/g, '')
@@ -22,7 +26,10 @@ function normalizePhone(p) {
 
 // ===== Load history.txt =====
 function preloadHistory(file = 'history.txt') {
-  if (!fs.existsSync(file)) return
+  if (!fs.existsSync(file)) {
+    console.log('⚠️ history.txt not found, skip preload')
+    return
+  }
 
   const text = fs.readFileSync(file, 'utf8')
   const rawPhones = text.match(/[\+]?[\d\-\s]{7,}/g) || []
@@ -36,6 +43,10 @@ function preloadHistory(file = 'history.txt') {
   })
 
   rawUsers.forEach(u => history.users.add(u.toLowerCase()))
+
+  console.log(
+    `📚 History loaded: ${history.phones.size} phones, ${history.users.size} usernames`
+  )
 }
 
 function getUser(chatId, userId) {
@@ -53,9 +64,6 @@ function getUser(chatId, userId) {
   return store.get(key)
 }
 
-const today = () => new Date().toISOString().slice(0, 10)
-const month = () => new Date().toISOString().slice(0, 7)
-
 const extractPhones = t => t.match(/\b\d{7,15}\b/g) || []
 const extractMentions = t => t.match(/@[a-zA-Z0-9_]{3,32}/g) || []
 
@@ -68,16 +76,18 @@ async function isAdmin(ctx) {
   }
 }
 
-// ===== Message Listener =====
+// ===== Message Listener (IGNORE COMMANDS) =====
 bot.on('text', async ctx => {
-  // ⚠️ 命令不进入统计
-  if (ctx.message.text.startsWith('/')) return
-
   const text = ctx.message.text
+
+  // ⚠️ 命令不进入统计
+  if (text.startsWith('/')) return
+
   const data = getUser(ctx.chat.id, ctx.from.id)
   const history = store.get('HISTORY')
   const logs = store.get('LOGS')
 
+  // ===== Reset day/month =====
   if (data.day !== today()) {
     data.day = today()
     data.phonesDay.clear()
@@ -124,7 +134,7 @@ bot.on('text', async ctx => {
     timeZone: 'Asia/Yangon'
   })
 
-  // ===== Save log =====
+  // ===== Save LOG =====
   logs.push({
     date: today(),
     time: now,
@@ -132,12 +142,12 @@ bot.on('text', async ctx => {
     userId: ctx.from.id,
     username: ctx.from.username ? '@' + ctx.from.username : '',
     name: `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim(),
+    duplicateCount: dupCount,
+    duplicateList: dupList.join(', '),
     phoneToday: data.phonesDay.size,
     usernameToday: data.usersDay.size,
     dailyIncrease: data.phonesDay.size + data.usersDay.size,
-    monthlyTotal: data.phonesMonth.size + data.usersMonth.size,
-    duplicateCount: dupCount,
-    duplicateList: dupList.join(', ')
+    monthlyTotal: data.phonesMonth.size + data.usersMonth.size
   })
 
   const msg =
@@ -152,34 +162,43 @@ bot.on('text', async ctx => {
   await ctx.reply(msg)
 })
 
-// ===== Export Orders =====
+// ===== Export Orders (FINAL) =====
 bot.command('export', async ctx => {
   if (!(await isAdmin(ctx))) return ctx.reply('❌ Admin only')
 
-  await ctx.reply('📤 Exporting, please wait...')
+  const args = ctx.message.text.trim().split(/\s+/)
+  const arg = args[1] || 'all'
 
-  const arg = ctx.message.text.split(' ')[1] || 'all'
   const logs = store.get('LOGS')
+  let data = logs
 
-  const data = logs.filter(l =>
-    arg === 'all' ||
-    l.date === arg ||
-    l.date.startsWith(arg)
-  )
+  if (arg !== 'all') {
+    data = logs.filter(l =>
+      l.date === arg || l.date.startsWith(arg)
+    )
+  }
 
-  if (!data.length) return ctx.reply('⚠️ No data')
+  if (!data.length) {
+    return ctx.reply('⚠️ No data to export')
+  }
+
+  await ctx.reply('📤 Exporting Excel, please wait...')
 
   const ws = XLSX.utils.json_to_sheet(data)
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Orders')
 
-  const file = `orders_${arg}.xlsx`
-  XLSX.writeFile(wb, file)
+  const fileName = `orders_${arg}.xlsx`
+  XLSX.writeFile(wb, fileName)
 
   await ctx.replyWithDocument({
-    source: fs.createReadStream(file),
-    filename: file
+    source: fs.createReadStream(fileName),
+    filename: fileName
   })
+
+  setTimeout(() => {
+    if (fs.existsSync(fileName)) fs.unlinkSync(fileName)
+  }, 5000)
 })
 
 // ===== Start =====
