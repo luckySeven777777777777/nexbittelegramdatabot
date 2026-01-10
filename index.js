@@ -57,6 +57,7 @@ function getUser(chatId, userId) {
   }
   return store.get(key)
 }
+
 function dailyCycleYangon() {
   const now = new Date(
     new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
@@ -147,23 +148,27 @@ if (data.day !== cycle) {
 
   // ===== Auto reply for ANY message =====
   const now = new Date().toLocaleString('en-US', {
-    timeZone: 'Asia/Yangon'
-  })
+  timeZone: 'Asia/Yangon'
+})
 
-  const msg =
+const msg =
 `👤 User: ${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''} ${ctx.from.id}
 📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
-📱 Phone Numbers Today:
+📱 Phone Numbers Today (Statistics Period: 12:00–12:00):
 ${data.phonesDay.size
   ? [...data.phonesDay].join('\n')
   : 'None'}
 Total: ${data.phonesDay.size}
-@ Username Today:
+@ Username Today (Statistics Period: 12:00–12:00):
 ${data.usersDay.size
   ? [...data.usersDay].join('\n')
   : 'None'}
 Total: ${data.usersDay.size}
-📈 Daily Increase: ${data.phonesDay.size + data.usersDay.size}
+📈 Daily Increase (Statistics Period: 12:00–12:00):
+${[...data.phonesDay, ...data.usersDay].length
+  ? [...data.phonesDay, ...data.usersDay].join('\n')
+  : 'None'}
+Total: ${data.phonesDay.size + data.usersDay.size}
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
 📅 Time: ${now}`
 
