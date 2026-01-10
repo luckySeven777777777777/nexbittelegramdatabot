@@ -47,7 +47,7 @@ function getUser(chatId, userId) {
   const key = `${chatId}:${userId}`
   if (!store.has(key)) {
     store.set(key, {
-      day: today(),
+      day: dailyCycleYangon(),
       month: month(),
       phonesDay: new Set(),
       usersDay: new Set(),
@@ -56,6 +56,20 @@ function getUser(chatId, userId) {
     })
   }
   return store.get(key)
+}
+function dailyCycleYangon() {
+  const now = new Date(
+    new Date().toLocaleString('en-US', { timeZone: 'Asia/Yangon' })
+  )
+  const hour = now.getHours()
+  const date = new Date(now)
+
+  // 如果当前时间 < 12 点，就算昨天的周期
+  if (hour < 12) {
+    date.setDate(date.getDate() - 1)
+  }
+
+  return date.toISOString().slice(0, 10)
 }
 
 const today = () => new Date().toISOString().slice(0,10)
@@ -80,11 +94,13 @@ bot.on('text', async ctx => {
   const history = store.get('HISTORY')
 
   // ===== Reset logic =====
-  if (data.day !== today()) {
-    data.day = today()
-    data.phonesDay.clear()
-    data.usersDay.clear()
-  }
+  const cycle = dailyCycleYangon()
+if (data.day !== cycle) {
+  data.day = cycle
+  data.phonesDay.clear()
+  data.usersDay.clear()
+}
+
 
   if (data.month !== month()) {
     data.month = month()
@@ -137,8 +153,16 @@ bot.on('text', async ctx => {
   const msg =
 `👤 User: ${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''} ${ctx.from.id}
 📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
-📱 Phone Numbers Today: ${data.phonesDay.size}
-@ Username Count Today: ${data.usersDay.size}
+📱 Phone Numbers Today:
+${data.phonesDay.size
+  ? [...data.phonesDay].join('\n')
+  : 'None'}
+Total: ${data.phonesDay.size}
+@ Username Today:
+${data.usersDay.size
+  ? [...data.usersDay].join('\n')
+  : 'None'}
+Total: ${data.usersDay.size}
 📈 Daily Increase: ${data.phonesDay.size + data.usersDay.size}
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
 📅 Time: ${now}`
