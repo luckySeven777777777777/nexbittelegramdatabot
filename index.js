@@ -147,30 +147,32 @@ if (data.day !== cycle) {
   })
 
   // ===== Auto reply for ANY message =====
-  const now = new Date().toLocaleString('en-US', {
+ const now = new Date().toLocaleString('en-US', {
   timeZone: 'Asia/Yangon'
 })
 
 const msg =
 `👤 User: ${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''} ${ctx.from.id}
 📝 Duplicate: ${dupCount ? `⚠️ ${dupList.join(', ')} (${dupCount})` : 'None'}
-📱 Phone Numbers Today (Statistics Period: 12:00–12:00):
+📱 Phone Numbers Today:
 ${data.phonesDay.size
   ? [...data.phonesDay].join('\n')
   : 'None'}
 Total: ${data.phonesDay.size}
-@ Username Today (Statistics Period: 12:00–12:00):
+@ Username Today:
 ${data.usersDay.size
   ? [...data.usersDay].join('\n')
   : 'None'}
 Total: ${data.usersDay.size}
-📈 Daily Increase (Statistics Period: 12:00–12:00):
+📈 Daily Increase:
 ${[...data.phonesDay, ...data.usersDay].length
   ? [...data.phonesDay, ...data.usersDay].join('\n')
   : 'None'}
 Total: ${data.phonesDay.size + data.usersDay.size}
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
-📅 Time: ${now}`
+📅 Time: ${now}
+(Statistics Period: 12:00AM–12:00PM)`
+
 
 
   await ctx.reply(msg)
