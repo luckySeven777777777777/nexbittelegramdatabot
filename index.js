@@ -164,11 +164,7 @@ ${data.usersDay.size
   ? [...data.usersDay].join('\n')
   : 'None'}
 Total: ${data.usersDay.size}
-📈 Daily Increase:
-${[...data.phonesDay, ...data.usersDay].length
-  ? [...data.phonesDay, ...data.usersDay].join('\n')
-  : 'None'}
-Total: ${data.phonesDay.size + data.usersDay.size}
+📈 Daily Increase: ${data.phonesDay.size + data.usersDay.size}
 📊 Monthly Total: ${data.phonesMonth.size + data.usersMonth.size}
 📅 Time: ${now}
 (Statistics Period: 12:00AM–12:00PM)`
